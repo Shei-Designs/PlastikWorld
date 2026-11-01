@@ -1252,3 +1252,12 @@ dialog.sheet.wide {
     }
   }
 }
+
+/* A segmented control that wraps onto more than one line, for the brushes. */
+.segmented.wrap {
+  flex-wrap: wrap;
+}
+
+.segmented.wrap button {
+  flex: 1 1 auto;
+}

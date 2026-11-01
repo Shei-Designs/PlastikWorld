@@ -34,6 +34,7 @@ import {
   PMREMGenerator,
   Quaternion,
   Raycaster,
+  RingGeometry,
   Scene,
   SphereGeometry,
   Sprite,
@@ -46,6 +47,7 @@ import {
 import type { WebGLRenderTarget } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { heightAt } from '../io/heightmap';
 import { loadGlb, loadObj } from '../io/meshes';
 import { quatOf } from '../model/math';
 import type { LightKind, Pose, Terrain, Vec3 } from '../model/types';
@@ -89,6 +91,10 @@ export interface ViewerEvents {
   onReadout(text: string | null, clientX: number, clientY: number): void;
   /** While placing: a click on the ground, where the new thing goes. */
   onPlace(point: Vec3): void;
+  /** Sculpting: a stroke begins on the ground at `point`; `onSculpt` follows at every move with the seconds since the last. */
+  onSculptStart(point: Vec3): void;
+  onSculpt(point: Vec3, dt: number): void;
+  onSculptEnd(canceled: boolean): void;
 }
 
 const DEFAULTS: ViewerOptions = { theme: 'dark', grid: true, snap: 0.05, interactive: true };
@@ -146,7 +152,8 @@ type Drag =
   | { mode: 'pending'; id: string; x: number; y: number; plane: Plane; origin: Vector3; vertical: boolean }
   | { mode: 'move'; id: string; plane: Plane; origin: Vector3; vertical: boolean }
   | { mode: 'pending-clear'; x: number; y: number; additive: boolean }
-  | { mode: 'place' };
+  | { mode: 'place' }
+  | { mode: 'sculpt'; last: number };
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
 const easeInOut = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
@@ -300,6 +307,11 @@ export class Viewer {
   private drag: Drag | null = null;
   private dragPointer = -1;
   private placing = false;
+  /** The brush radius while sculpting, or null. */
+  private sculpting: number | null = null;
+  /** The ring showing the brush on the ground. */
+  private brushRing: Mesh<RingGeometry, MeshBasicMaterial> | null = null;
+  private lastHeights: Float32Array | null = null;
   private animation: Animation | null = null;
   private fallback: HTMLElement | null = null;
 
@@ -341,6 +353,49 @@ export class Viewer {
     if (this.ok) this.renderer.domElement.style.cursor = placing ? 'copy' : '';
   }
 
+  /** Sculpting with a brush of this radius (meters), or not. */
+  setSculpt(radius: number | null): void {
+    this.sculpting = radius;
+    if (!this.ok) return;
+    this.renderer.domElement.style.cursor = radius !== null ? 'crosshair' : this.placing ? 'copy' : '';
+    if (radius === null && this.brushRing) this.brushRing.visible = false;
+    if (radius !== null) this.placeRing(null, radius);
+    this.requestRender();
+  }
+
+  /**
+   * The ground's heights changed in place (a stroke under way): the mesh's
+   * vertices in the window are moved, no rebuild. The whole grid when the
+   * window is omitted.
+   */
+  refreshHeights(window?: { r0: number; r1: number; c0: number; c1: number }): void {
+    const t = this.terrain;
+    if (!this.ground || !t || t.kind !== 'heightmap') return;
+    const pos = this.ground.geometry.getAttribute('position') as BufferAttribute;
+    const { rows, cols, heights } = t;
+    const r0 = window?.r0 ?? 0, r1 = window?.r1 ?? rows - 1, c0 = window?.c0 ?? 0, c1 = window?.c1 ?? cols - 1;
+    // A PlaneGeometry's vertices run from +Y down; the grid's rows run from -Y up.
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) pos.setZ((rows - 1 - r) * cols + c, heights[r * cols + c]);
+    pos.needsUpdate = true;
+    this.ground.geometry.computeBoundingSphere();
+    this.requestRender();
+  }
+
+  /** The brush ring on the ground at a point (or where it last was). */
+  private placeRing(point: Vector3 | null, radius = this.sculpting ?? 1): void {
+    if (!this.brushRing) {
+      const ring = new Mesh(new RingGeometry(0.92, 1, 64), new MeshBasicMaterial({ color: THEMES[this.options.theme].accent, transparent: true, opacity: 0.85, depthTest: false, side: DoubleSide }));
+      ring.renderOrder = 10;
+      this.brushRing = ring;
+      this.scene.add(ring);
+      this.disposables.push(ring.geometry, ring.material);
+    }
+    const ring = this.brushRing;
+    ring.scale.set(radius, radius, 1);
+    if (point) ring.position.copy(point).setZ(point.z + 0.02);
+    ring.visible = point !== null || ring.visible;
+  }
+
   setTriadOrigin(x: number, y: number): void {
     this.triadOrigin = { x, y };
     this.requestRender();
@@ -376,6 +431,8 @@ export class Viewer {
     this.drag = null;
     this.events.onReadout(null, 0, 0);
     if (drag.mode === 'move') this.events.onGestureEnd(true);
+    if (drag.mode === 'sculpt') this.events.onSculptEnd(true);
+    this.controls.enabled = true;
     return true;
   }
 
@@ -653,9 +710,17 @@ export class Viewer {
 
   private syncTerrain(): void {
     const terrain = this.terrain;
-    const key = terrain ? JSON.stringify(terrain) : '';
-    if (key === this.terrainKey) return;
+    // Everything but the heights goes in the key; the heights are a buffer of their own, compared by identity.
+    const key = terrain ? [terrain.kind, terrain.size.join(','), terrain.kind === 'heightmap' ? `${terrain.rows}x${terrain.cols}` : ''].join('|') : '';
+    if (key === this.terrainKey) {
+      if (terrain?.kind === 'heightmap' && terrain.heights !== this.lastHeights) {
+        this.lastHeights = terrain.heights;
+        this.refreshHeights();
+      }
+      return;
+    }
     this.terrainKey = key;
+    this.lastHeights = terrain?.kind === 'heightmap' ? terrain.heights : null;
     if (this.ground) {
       this.scene.remove(this.ground);
       disposeObject(this.ground);
@@ -741,14 +806,45 @@ export class Viewer {
     return null;
   }
 
-  /** Where the ray meets the ground (the terrain, or the z=0 plane). */
+  /**
+   * Where the ray meets the ground: the z = 0 plane, or the terrain, found by
+   * marching the ray over the heights (a heightmap of a million triangles is
+   * no place for the raycaster) and bisecting the step that crossed it.
+   */
   private groundPoint(): Vector3 | null {
-    if (this.ground) {
-      const hit = this.raycaster.intersectObject(this.ground, false)[0];
-      if (hit) return hit.point;
-    }
+    const ray = this.raycaster.ray;
+    const t = this.terrain;
     const point = new Vector3();
-    return this.raycaster.ray.intersectPlane(new Plane(new Vector3(0, 0, 1), 0), point);
+    if (!t || t.kind !== 'heightmap') return ray.intersectPlane(new Plane(new Vector3(0, 0, 1), 0), point);
+    let lo = Infinity, hi = -Infinity;
+    for (const h of t.heights) {
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    const at = (s: number) => point.copy(ray.direction).multiplyScalar(s).add(ray.origin);
+    const above = (s: number) => at(s).z - heightAt(t, point.x, point.y) > 0 || Math.abs(point.x) > t.size[0] / 2 || Math.abs(point.y) > t.size[1] / 2;
+    // From where the ray passes the highest sample to where it passes the lowest.
+    const dz = ray.direction.z;
+    if (Math.abs(dz) < 1e-6) return null;
+    const start = Math.max(0, (hi + 0.01 - ray.origin.z) / dz), end = (lo - 0.01 - ray.origin.z) / dz;
+    if (end <= start) return null;
+    const step = Math.max(0.05, Math.min(t.size[0] / (t.cols - 1), t.size[1] / (t.rows - 1)) / 2);
+    let s0 = start;
+    if (!above(s0)) return ray.intersectPlane(new Plane(new Vector3(0, 0, 1), heightAt(t, at(s0).x, at(s0).y)), point);
+    for (let s = start + step; s <= end + step; s += step) {
+      if (above(s)) {
+        s0 = s;
+        continue;
+      }
+      let a = s0, b = s;
+      for (let i = 0; i < 12; i++) {
+        const m = (a + b) / 2;
+        if (above(m)) a = m;
+        else b = m;
+      }
+      return at((a + b) / 2);
+    }
+    return null;
   }
 
   private snap(v: number): number {
@@ -775,6 +871,17 @@ export class Viewer {
     if (this.placing) {
       this.drag = { mode: 'place' };
       claim();
+      return;
+    }
+    if (this.sculpting !== null) {
+      // One finger or the left button sculpts; the camera keeps the other buttons and a second finger.
+      const point = this.groundPoint();
+      if (!point) return;
+      claim();
+      this.controls.enabled = false;
+      this.drag = { mode: 'sculpt', last: event.timeStamp };
+      this.placeRing(point);
+      this.events.onSculptStart([point.x, point.y, point.z]);
       return;
     }
     if (!this.options.interactive) return;
@@ -806,6 +913,13 @@ export class Viewer {
     this.setRay(event);
     const drag = this.drag;
     if (!drag) {
+      if (this.sculpting !== null) {
+        const point = this.groundPoint();
+        if (point) this.placeRing(point);
+        else if (this.brushRing) this.brushRing.visible = false;
+        this.requestRender();
+        return;
+      }
       if (event.buttons === 0 && this.options.interactive && !this.placing) this.renderer.domElement.style.cursor = this.pickItem() ? 'move' : '';
       return;
     }
@@ -813,6 +927,15 @@ export class Viewer {
       case 'place':
       case 'pending-clear':
         return;
+      case 'sculpt': {
+        const point = this.groundPoint();
+        const dt = Math.min(0.1, (event.timeStamp - drag.last) / 1000);
+        drag.last = event.timeStamp;
+        if (!point) return;
+        this.placeRing(point);
+        this.events.onSculpt([point.x, point.y, point.z], dt);
+        return;
+      }
       case 'pending': {
         if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < dragThreshold(event)) return;
         this.drag = { mode: 'move', id: drag.id, plane: drag.plane, origin: drag.origin, vertical: drag.vertical };
@@ -871,6 +994,9 @@ export class Viewer {
         return;
       case 'move':
         this.events.onGestureEnd(event.type === 'pointercancel');
+        return;
+      case 'sculpt':
+        this.events.onSculptEnd(event.type === 'pointercancel');
     }
   };
 

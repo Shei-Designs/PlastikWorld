@@ -20,6 +20,7 @@ import type { ExportBundle, Resolved, ResolvedMesh } from './export';
 import { identifier } from './format';
 import { gazeboBundle } from './gazebo';
 import { heightAt, rollingField } from './heightmap';
+import { dab } from '../terrain/brush';
 import { mujocoBundle } from './mjcf';
 import { isaacBundle } from './usda';
 
@@ -215,6 +216,10 @@ function tellingSpot(terrain: Terrain): Vec3 {
       const h = heightAt(terrain, x, y);
       const slope = Math.max(Math.abs(heightAt(terrain, x + 0.3, y) - heightAt(terrain, x - 0.3, y)), Math.abs(heightAt(terrain, x, y + 0.3) - heightAt(terrain, x, y - 0.3))) / 0.6;
       if (slope > 0.12) continue;
+      // Gentle a meter around as well: the top of the sculpted mound is level only at its very point, and a crate
+      // dropped there bounces off down the side in PhysX.
+      const around = [heightAt(terrain, x + 1, y), heightAt(terrain, x - 1, y), heightAt(terrain, x, y + 1), heightAt(terrain, x, y - 1)];
+      if (around.some((o) => Math.abs(o - h) > 0.2)) continue;
       const score = Math.min(...[heightAt(terrain, x, -y), heightAt(terrain, -x, y), heightAt(terrain, y, x), heightAt(terrain, -x, -y)].map((o) => Math.abs(h - o)));
       if (score > bestScore) {
         bestScore = score;
@@ -259,7 +264,13 @@ async function yards(): Promise<{ worlds: World[]; resolved: Resolved }> {
   const worlds: World[] = [];
   for (const kind of ['plane', 'heightmap'] as const) {
     const world = emptyWorld(kind === 'plane' ? 'Smoke Flat' : 'Smoke Hills');
-    if (kind === 'heightmap') world.terrain = { kind, size: [24, 24], friction: 1, rows: 65, cols: 65, heights: rollingField(65, 65, 1.5) };
+    if (kind === 'heightmap') {
+      world.terrain = { kind, size: [24, 24], friction: 1, rows: 65, cols: 65, heights: rollingField(65, 65, 1.5) };
+      // Sculpted as a user would: a mound raised in one corner and a terrace flattened in another, so the
+      // engines also see brushed ground, not only the generated field.
+      for (let i = 0; i < 15; i++) dab(world.terrain, { kind: 'raise', radius: 2.5, strength: 1, target: 0 }, -7, 7, 0.1);
+      for (let i = 0; i < 30; i++) dab(world.terrain, { kind: 'flatten', radius: 2.5, strength: 1, target: 0 }, 7, -7, 0.1, 0.9);
+    }
     const ground = (x: number, y: number) => heightAt(world.terrain, x, y);
     const at = (x: number, y: number, lift: number, yaw = 0, roll = 0): Placed['pose'] => ({ xyz: [x, y, ground(x, y) + lift], rpy: [roll, 0, yaw] });
     world.assets.push({ kind: 'mesh', id: 'crate', name: 'Crate', source: { name: 'Crate.glb', path: null, size: crate.glb!.byteLength }, data: crate.glb! }, ...robots);

@@ -1,8 +1,10 @@
 // The right panel: what is picked, with its numbers.
-import { heightAt, range, resample, rollingField } from '../io/heightmap';
+import { heightAt, range, resample } from '../io/heightmap';
+import { BRUSH_KINDS, DEFAULT_BRUSH, DEFAULT_FIELD, FIELD_KINDS } from '../terrain/brush';
+import type { FieldSpec } from '../terrain/brush';
 import { GRID_MAX, GRID_SIZES, assetOf } from '../model/types';
 import type { Light, LightKind, Placed, SpawnPoint, Terrain, World } from '../model/types';
-import { deleteSelected, duplicateSelected, setTerrainKind, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { deleteSelected, duplicateSelected, generateTerrain, setBrush, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
 import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
@@ -138,8 +140,10 @@ function SpawnPanel({ spawn }: { spawn: SpawnPoint }) {
 
 function TerrainPanel({ terrain }: { terrain: Terrain }) {
   const update = (patch: Partial<Terrain>) => updateTerrain({ ...terrain, ...patch } as Terrain);
-  // How tall the next generated field is; not part of the world, so it lives here.
-  const [amplitude, setAmplitude] = useState(1.5);
+  const tool = useEditor((s) => s.tool);
+  const brush = tool?.brush ?? DEFAULT_BRUSH;
+  // What the next generated field looks like; not part of the world, so it lives here.
+  const [field, setField] = useState<FieldSpec>(DEFAULT_FIELD);
   const [lo, hi] = terrain.kind === 'heightmap' ? range(terrain.heights) : [0, 0];
   return (
     <div className="params">
@@ -149,7 +153,7 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
         value={terrain.kind}
         options={[
           { id: 'plane', label: 'Flat plane' },
-          { id: 'heightmap', label: 'Heightmap (rolling field)' },
+          { id: 'heightmap', label: 'Heightmap (sculpted or generated)' },
         ]}
         onChange={setTerrainKind}
       />
@@ -182,12 +186,48 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
             <dt>At the origin</dt>
             <dd>{heightAt(terrain, 0, 0).toFixed(3)} m</dd>
           </dl>
-          <NumberField label="Field height" unit="m" value={amplitude} min={0} step={0.1} decimals={2} onChange={setAmplitude} />
-          <button type="button" className="chip" onClick={() => update({ heights: rollingField(terrain.rows, terrain.cols, amplitude) })}>
-            Regenerate the field
-          </button>
+          <h2>Sculpt</h2>
+          <div className="segmented wrap" role="group" aria-label="Brush">
+            {BRUSH_KINDS.map((b) => (
+              <button key={b.id} type="button" className={tool?.brush.kind === b.id ? 'on' : ''} title={b.hint} onClick={() => (tool?.brush.kind === b.id ? setTool(null) : setTool({ kind: 'sculpt', brush: { ...brush, kind: b.id } }))}>
+                {b.label}
+              </button>
+            ))}
+          </div>
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <NumberField label="Brush size" unit="m" value={brush.radius} min={0.1} max={50} step={0.5} decimals={2} onChange={(radius) => setBrush({ radius })} />
+            <NumberField label={brush.kind === 'raise' || brush.kind === 'lower' ? 'Speed' : 'Strength'} unit={brush.kind === 'raise' || brush.kind === 'lower' ? 'm/s' : '/s'} value={brush.strength} min={0.01} step={0.25} decimals={2} onChange={(strength) => setBrush({ strength })} />
+          </div>
+          {brush.kind === 'set' && <NumberField label="Set to" unit="m" value={brush.target} step={0.1} decimals={2} onChange={(target) => setBrush({ target })} />}
+          <p className="note">{tool ? 'Drag on the ground in the viewport. Each stroke is one undo step.' : 'Pick a brush, then drag on the ground. Two fingers or the right button still turn the camera.'}</p>
+          <h2>Generate</h2>
+          <SelectField label="Field" value={field.kind} options={FIELD_KINDS} onChange={(kind) => setField({ ...field, kind })} />
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <NumberField label="Height" unit="m" value={field.amplitude} min={0} step={0.1} decimals={2} onChange={(amplitude) => setField({ ...field, amplitude })} />
+            <NumberField label="Feature size" unit="× side" value={field.feature} min={0.05} max={1} step={0.05} decimals={2} onChange={(feature) => setField({ ...field, feature })} />
+          </div>
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <NumberField label="Seed" value={field.seed} step={1} decimals={0} onChange={(seed) => setField({ ...field, seed: Math.round(seed) })} />
+            <NumberField label="Level middle" unit="× half" value={field.clear} min={0} max={1} step={0.05} decimals={2} onChange={(clear) => setField({ ...field, clear })} />
+          </div>
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <button type="button" className="chip" onClick={() => generateTerrain(field)}>
+              Generate
+            </button>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                const next = { ...field, seed: Math.floor(Math.random() * 1e6) };
+                setField(next);
+                generateTerrain(next);
+              }}
+            >
+              New seed
+            </button>
+          </div>
           <p className="note">
-            The grid is 2^n + 1 samples a side so that Gazebo, MuJoCo and Isaac Sim all get the very same heights; past {GRID_MAX} the Isaac stage's ground mesh gets heavy. Sculpting and importing heightmaps are the next steps on the roadmap.
+            The grid is 2^n + 1 samples a side so that Gazebo, MuJoCo and Isaac Sim all get the very same heights; past {GRID_MAX} the Isaac stage's ground mesh gets heavy. Importing a heightmap image is next on the roadmap.
           </p>
         </>
       )}

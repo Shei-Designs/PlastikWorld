@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { Light, World } from '../model/types';
 import { assetEpoch, loadedAsset, subscribeAssets } from '../state/assets';
 import { SNAP_STEPS } from '../state/persist';
-import { beginGesture, cancelPlacing, deleteSelected, duplicateSelected, endGesture, moveBy, placeAt, provideThumbnail, redo, select, setPrefs, showPanel, undo, useEditor } from '../state/store';
+import { beginGesture, beginSculpt, cancelPlacing, deleteSelected, duplicateSelected, endGesture, endSculpt, moveBy, placeAt, provideThumbnail, redo, sculptAt, select, setPrefs, setTool, showPanel, undo, useEditor } from '../state/store';
+import { BRUSH_KINDS } from '../terrain/brush';
 import { GIZMO_SIZE, Viewer } from '../viewer/Viewer';
 import type { ViewItem, ViewPreset, Visual } from '../viewer/Viewer';
 import { CloseIcon, DuplicateIcon, FitIcon, GridIcon, MenuIcon, RedoIcon, SlidersIcon, TrashIcon, UndoIcon } from './icons';
@@ -42,6 +43,7 @@ export function Viewport() {
   const selection = useEditor((s) => s.selection);
   const prefs = useEditor((s) => s.prefs);
   const placing = useEditor((s) => s.placing);
+  const tool = useEditor((s) => s.tool);
   const busy = useEditor((s) => s.busy);
   const canUndo = useEditor((s) => s.canUndo);
   const canRedo = useEditor((s) => s.canRedo);
@@ -57,6 +59,9 @@ export function Viewport() {
         onMove: moveBy,
         onGestureEnd: endGesture,
         onPlace: placeAt,
+        onSculptStart: (point) => beginSculpt(point, (window) => v.refreshHeights(window)),
+        onSculpt: sculptAt,
+        onSculptEnd: endSculpt,
         onReadout: (text, x, y) => {
           const el = readout.current;
           if (!el) return;
@@ -84,6 +89,7 @@ export function Viewport() {
   useEffect(() => viewerRef.current?.setItems(items, world.terrain), [items, world.terrain]);
   useEffect(() => viewerRef.current?.setOptions({ theme: prefs.theme, grid: prefs.grid, snap: prefs.snap }), [prefs.theme, prefs.grid, prefs.snap]);
   useEffect(() => viewerRef.current?.setPlacing(placing !== null), [placing]);
+  useEffect(() => viewerRef.current?.setSculpt(tool ? tool.brush.radius : null), [tool]);
 
   const placingLabel = placing ? (placing.kind === 'asset' ? world.assets.find((a) => a.id === placing.asset)?.name ?? 'object' : placing.kind === 'light' ? `${placing.light} light` : 'spawn point') : null;
   const empty = world.objects.length === 0 && world.spawns.length === 0;
@@ -132,6 +138,16 @@ export function Viewport() {
         <div className="stage-hint">
           <span>Click on the ground to place the {placingLabel}.</span>
           <button type="button" className="icon-button" aria-label="Stop placing" onClick={cancelPlacing}>
+            <CloseIcon />
+          </button>
+        </div>
+      )}
+      {tool && (
+        <div className="stage-hint">
+          <span>
+            {BRUSH_KINDS.find((b) => b.id === tool.brush.kind)?.hint}. Two fingers or the right button turn the camera; [ and ] change the brush size; Esc stops.
+          </span>
+          <button type="button" className="icon-button" aria-label="Stop sculpting" onClick={() => setTool(null)}>
             <CloseIcon />
           </button>
         </div>

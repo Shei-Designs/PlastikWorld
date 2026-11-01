@@ -10,6 +10,8 @@ import { isaacBundle } from '../io/usda';
 import { encodeText } from '../io/format';
 import type { ExportBundle, Resolved } from '../io/export';
 import { rollingField } from '../io/heightmap';
+import { DEFAULT_BRUSH, dab, generateField } from '../terrain/brush';
+import type { Brush, FieldSpec, Window as BrushWindow } from '../terrain/brush';
 import { parseWorld, parseWorldText, serializeWorld, serializeWorldText } from '../model/file';
 import { add, newId, uniqueName } from '../model/math';
 import { DEFAULT_PHYSICS, GRID_DEFAULT, assetPresent, emptyWorld } from '../model/types';
@@ -34,6 +36,9 @@ export interface Notice {
 /** The thing the next click on the ground puts down. */
 export type Placing = { kind: 'asset'; asset: string } | { kind: 'light'; light: LightKind } | { kind: 'spawn' };
 
+/** A tool that takes the pointer on the ground: sculpting with a brush. */
+export type Tool = { kind: 'sculpt'; brush: Brush };
+
 export interface EditorState {
   world: World;
   /** What the inspector shows. */
@@ -46,6 +51,8 @@ export interface EditorState {
   saved: World | null;
   saving: boolean;
   placing: Placing | null;
+  /** The tool the pointer drives on the ground, if any; the selection and placing give way to it. */
+  tool: Tool | null;
   /** Where worlds are kept, once start-up has looked: the folder (null in a browser), and whether another can be chosen. */
   storage: { location: string | null; defaultDir: string | null; fixed: boolean } | null;
   /** The worlds browser is open. */
@@ -70,6 +77,7 @@ let state: EditorState = {
   saved: null,
   saving: false,
   placing: null,
+  tool: null,
   storage: null,
   browsing: false,
   panel: null,
@@ -200,7 +208,7 @@ export function selectAll(): void {
 const GLB_FILTER = [{ name: 'glTF binary (PlastikCAD export)', extensions: ['glb'] }];
 const WORLD_FILTER = [{ name: `${APP_NAME} world`, extensions: [FILE_EXTENSION] }];
 
-export const startPlacing = (placing: Placing): void => set({ placing, selection: [] });
+export const startPlacing = (placing: Placing): void => set({ placing, selection: [], tool: null });
 export const cancelPlacing = (): void => set({ placing: null });
 
 /** Puts the thing being placed down at a point on the ground. */
@@ -340,6 +348,62 @@ export function updateSpawn(id: string, patch: Partial<SpawnPoint>): void {
 
 export function updateTerrain(terrain: Terrain): void {
   edit((w) => ({ ...w, terrain }));
+}
+
+// --- sculpting ---------------------------------------------------------------
+//
+// A stroke works on a copy of the heights, dab by dab, with the viewer moving
+// the vertices as it goes; the world takes the copy once the stroke ends, as
+// one step of the history. The heights buffer is mutated during the stroke,
+// which is why the copy is made first: the buffer the history holds must stay
+// as it was.
+
+let stroke: { before: World; heights: Float32Array; level: number; refresh: (window: BrushWindow) => void } | null = null;
+
+export function setTool(tool: Tool | null): void {
+  if (stroke) endSculpt(true);
+  set({ tool, placing: null, selection: tool ? [] : state.selection, pick: tool ? { kind: 'terrain' } : state.pick });
+}
+
+export const setBrush = (patch: Partial<Brush>): void => set({ tool: { kind: 'sculpt', brush: { ...(state.tool?.brush ?? DEFAULT_BRUSH), ...patch } } });
+
+/** A stroke begins at a point on the ground; `refresh` is the viewer's way to move the touched vertices. */
+export function beginSculpt(point: Vec3, refresh: (window: BrushWindow) => void): void {
+  const t = state.world.terrain;
+  if (!state.tool || t.kind !== 'heightmap') return;
+  if (stroke) endSculpt(true);
+  const heights = t.heights.slice();
+  stroke = { before: state.world, heights, level: point[2], refresh };
+  set({ world: { ...state.world, terrain: { ...t, heights } } });
+}
+
+export function sculptAt(point: Vec3, dt: number): void {
+  const t = state.world.terrain;
+  if (!stroke || !state.tool || t.kind !== 'heightmap') return;
+  const window = dab(t, state.tool.brush, point[0], point[1], dt, stroke.level);
+  if (window) stroke.refresh(window);
+}
+
+export function endSculpt(canceled: boolean): void {
+  if (!stroke) return;
+  const { before } = stroke;
+  stroke = null;
+  if (canceled) {
+    set({ world: before });
+    return;
+  }
+  // The world already holds the stroke; the history takes the world from before it.
+  past.push(before);
+  if (past.length > 200) past.shift();
+  future = [];
+  set({});
+}
+
+/** Replaces the heights with a generated field, one step of the history. */
+export function generateTerrain(spec: FieldSpec): void {
+  const t = state.world.terrain;
+  if (t.kind !== 'heightmap') return;
+  updateTerrain({ ...t, heights: generateField(t.rows, t.cols, spec) });
 }
 
 /** Turns the ground into a rolling field, or back to a plane. */

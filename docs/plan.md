@@ -117,6 +117,11 @@ Checks: the smoke tests themselves, run on all three.
 
 ## Phase 3. Terrain sculpting (M)
 
+**Done 2026-11-01**: `src/terrain/brush.ts` (five brushes, four seeded
+field kinds), the viewer's sculpt mode with a ray-marched ground pick and
+in-place vertex updates, one undo step per stroke, the hills fixture
+sculpted with a mound and a terrace and run through the three engines.
+
 - Brush tools in the viewer: raise, lower, smooth, flatten to the height
   under the brush, set to a given height; size and strength; a falloff.
   Brush math in `src/terrain/brush.ts` on the Float32 grid, pure and

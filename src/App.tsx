@@ -21,6 +21,8 @@ import {
   saveWorld,
   select,
   selectAll,
+  setBrush,
+  setTool,
   showAbout,
   showExport,
   showPanel,
@@ -71,7 +73,15 @@ function onKeyDown(e: KeyboardEvent): void {
   if (key === 'Escape') {
     if (viewerRef.current?.cancelGesture()) return;
     if (getState().placing) cancelPlacing();
+    else if (getState().tool) setTool(null);
     else select(null);
+    return;
+  }
+  // The brush size, while sculpting.
+  const brush = getState().tool?.brush;
+  if (brush && (key === '[' || key === ']')) {
+    e.preventDefault();
+    setBrush({ radius: Math.min(50, Math.max(0.1, brush.radius * (key === ']' ? 1.25 : 0.8))) });
     return;
   }
   if (mod && key === 'z') {

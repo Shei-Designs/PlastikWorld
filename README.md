@@ -83,6 +83,21 @@ translation.
 Terrain is one source with three writers: Gazebo wants an image on disk,
 MuJoCo wants the heights inline, Isaac wants a mesh.
 
+### Terrain
+
+The ground is a flat plane or a heightmap: a square grid of 65 to 1025
+samples a side (2049 with a warning), the one size every engine takes as it
+is, over any area. Pick the terrain in the sidebar to shape it. **Generate**
+makes a whole field from a seed: rolling waves, hills of noise, ridges or
+craters, with a height, a feature size and a level patch in the middle for a
+robot to start on; the same seed makes the same field again. **Sculpt** with
+a brush: raise, lower, smooth, flatten to the height where the stroke began,
+or set a height. Drag on the ground with the left button or one finger; the
+right button, the middle button or a second finger still move the camera;
+`[` and `]` change the brush size; Esc puts the brush down. Each stroke is
+one undo step. Terrain is made here and never imported as a mesh: a bridge
+spans a valley as an object, a tunnel is an object in the ground.
+
 ### Controls
 
 | | |
@@ -209,7 +224,8 @@ exports with a note in the other two, the way robot package clashes do now.
    ROS 2 graph; PlastikCAD's own Isaac export does, and its `smoke:usd`
    drives that over ROS 2), so the exports are proven usable, not just
    loadable.
-2. **Terrain tools.** Sculpting in the viewer (raise, lower, smooth, flatten);
+2. **Terrain tools.** Sculpting in the viewer (raise, lower, smooth, flatten
+   and set, done) and seeded fields (rolling, hills, ridges, craters, done);
    a heightmap from an image (8 or 16-bit greyscale PNG with a size and a
    height scale); real elevation from GeoTIFF or DEM tiles (USGS 3DEP, SRTM,
    Copernicus), a box picked and resampled onto the grid. Terrain is made
