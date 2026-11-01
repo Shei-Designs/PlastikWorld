@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-opened-files"
+description = "Enables the opened_files command without any pre-configured scope."
+commands.allow = ["opened_files"]
+
+[[permission]]
+identifier = "deny-opened-files"
+description = "Denies the opened_files command without any pre-configured scope."
+commands.deny = ["opened_files"]

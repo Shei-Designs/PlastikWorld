@@ -12,14 +12,19 @@ through its launch file when it has one (a ROS package robot is spawned by
 ros_gz_sim) or straight in gz sim; every placed prop and robot must appear;
 after settling, a fixed prop must not have moved, a free prop must rest on the
 ground at the height the file gives it (a heightmap written upside down lands
-it a hill away), and a robot must stand on the ground. Exits non-zero on any
-failure, and reports the [Err] lines Gazebo printed on the way.
+it a hill away), and a robot must stand on the ground. Then each robot is
+driven forward for a few seconds, a ROS package robot with a Twist on
+/cmd_vel through the bridge its launch file starts, a Gazebo model with the
+same message on the gz topic: it must cover the distance along its heading,
+stay upright and on the ground, and climb when it starts on a slope. Exits
+non-zero on any failure, and reports the [Err] lines Gazebo printed on the way.
 
 The process handling and the pose reading are lifted from PlastikCAD's
 tools/ros_smoke.py, so the two smoke tests behave alike.
 """
 import glob
 import json
+import math
 import os
 import re
 import signal
@@ -102,6 +107,77 @@ def resting(z, ground, edge):
     return ground - 0.05 - 0.25 * edge <= z <= ground + edge + 0.05
 
 
+def ground_of(terrain, x, y):
+    """The ground height the world file gives at (x, y): bilinear between samples, mirroring io/heightmap.ts heightAt; 0 on a plane or outside."""
+    if terrain['kind'] != 'heightmap':
+        return 0.0
+    rows, cols, size, hs = terrain['rows'], terrain['cols'], terrain['size'], terrain['heights']
+    u = (x / size[0] + 0.5) * (cols - 1)
+    v = (y / size[1] + 0.5) * (rows - 1)
+    if u < 0 or v < 0 or u > cols - 1 or v > rows - 1:
+        return 0.0
+    c0, r0 = min(math.floor(u), cols - 2), min(math.floor(v), rows - 2)
+    fu, fv = u - c0, v - r0
+    h = lambda r, c: hs[r * cols + c]  # noqa: E731
+    top = h(r0, c0) * (1 - fu) + h(r0, c0 + 1) * fu
+    bottom = h(r0 + 1, c0) * (1 - fu) + h(r0 + 1, c0 + 1) * fu
+    # The file's heights are meters (format 2); nothing to scale.
+    return top * (1 - fv) + bottom * fv
+
+
+def judge_drive(name, robot, terrain, before, after, roll, pitch):
+    """What a drive must have done: covered the distance along the heading, kept the robot upright and on the ground, and climbed on the hills."""
+    d = robot['drive']
+    dx, dy = after[0] - before[0], after[1] - before[1]
+    moved = math.hypot(dx, dy)
+    if moved < d['mustMove']:
+        fail(name, f'robot {robot["id"]} moved only {moved:.2f} m in {d["seconds"]} s when driven forward')
+    else:
+        off = abs(math.degrees((math.atan2(dy, dx) - d['heading'] + math.pi) % (2 * math.pi) - math.pi))
+        if off > 45:
+            fail(name, f'robot {robot["id"]} drove {moved:.2f} m but {off:.0f}° off its heading')
+        else:
+            ok(f'robot {robot["id"]} drove {moved:.2f} m along its heading ({off:.0f}° off)')
+    if abs(roll) > 0.5 or abs(pitch) > 0.5:
+        fail(name, f'robot {robot["id"]} tipped over: roll {roll:.2f}, pitch {pitch:.2f} rad')
+    g0, g1 = ground_of(terrain, before[0], before[1]), ground_of(terrain, after[0], after[1])
+    if after[2] < g1 - 0.05:
+        fail(name, f'robot {robot["id"]} is at z = {after[2]:.3f} m, under the ground at {g1:.3f} m')
+    elif after[2] > g1 + 0.5:
+        fail(name, f'robot {robot["id"]} is at z = {after[2]:.3f} m, over the ground at {g1:.3f} m')
+    elif d.get('uphill'):
+        if g1 - g0 < 0.05:
+            fail(name, f'robot {robot["id"]} did not climb: the ground went from {g0:.3f} m to {g1:.3f} m')
+        else:
+            ok(f'robot {robot["id"]} climbed {g1 - g0:.2f} m and stays on the ground (z = {after[2]:.3f} m, ground {g1:.3f} m)')
+    else:
+        ok(f'robot {robot["id"]} stays on the ground (z = {after[2]:.3f} m, ground {g1:.3f} m)')
+
+
+def drive(name, robot, terrain, env):
+    """Drives the robot forward as its package means it to be driven, and judges where it got to."""
+    d = robot['drive']
+    before = gz_pose(robot['id'])
+    if not before:
+        return fail(name, f'could not read the pose of robot {robot["id"]} before driving')
+    if d['via'] == 'ros':
+        # Through ros_gz_bridge, as the package's config/bridge.yaml sets it up and the world's launch file starts it.
+        run(['ros2', 'topic', 'pub', '-r', '20', '-t', str(int(d['seconds'] * 20)), d['topic'], 'geometry_msgs/msg/Twist', f"{{linear: {{x: {d['speed']}}}}}"], timeout=d['seconds'] + 60, env=env)
+        run(['ros2', 'topic', 'pub', '-1', '-w', '1', d['topic'], 'geometry_msgs/msg/Twist', '{}'], timeout=30, env=env)
+    else:
+        # Straight onto the DiffDrive system's gz topic.
+        end = time.time() + d['seconds']
+        while time.time() < end:
+            run(['gz', 'topic', '-t', d['topic'], '-m', 'gz.msgs.Twist', '-p', f"linear: {{x: {d['speed']}}}"], timeout=10, env=env)
+            time.sleep(0.1)
+        run(['gz', 'topic', '-t', d['topic'], '-m', 'gz.msgs.Twist', '-p', 'linear: {x: 0}'], timeout=10, env=env)
+    time.sleep(1)
+    after = gz_pose(robot['id'])
+    if not after:
+        return fail(name, f'could not read the pose of robot {robot["id"]} after driving')
+    judge_drive(name, robot, terrain, before[:3], after[:3], after[3], after[4])
+
+
 def check(smoke_path, env):
     spec = json.load(open(smoke_path))
     bundle = smoke_path[: -len('.smoke.json')]
@@ -166,6 +242,9 @@ def check(smoke_path, env):
                     fail(name, f'robot {item["id"]} floats at z = {p1[2]:.3f} m over ground at {item["ground"]:.3f} m')
                 else:
                     ok(f'robot {item["id"]} stands at z = {p1[2]:.3f} m, ground {item["ground"]:.3f} m')
+        for item in spec['robots']:
+            if item['placed'] and item.get('drive'):
+                drive(name, item, spec['terrain'], env)
     finally:
         errs = launched.errors()
         launched.stop()

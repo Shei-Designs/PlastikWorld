@@ -4,12 +4,12 @@
 // `model://` URI (a Gazebo model folder) or spawned from a launch file (a ROS 2
 // package). The bundle is self-contained: meshes and robot folders go beside
 // the world file.
-import { gazeboSize, resample } from './heightmap';
+import { gazeboSize, range, resample } from './heightmap';
 import { encodeGreyPng } from './png';
 import { bundleName, claimFolder, escapeXml, fmt, vec } from './export';
 import type { ExportBundle, ExportFile, Resolved } from './export';
 import { identifier } from './format';
-import { assetOf } from '../model/types';
+import { assetOf, assetPresent } from '../model/types';
 import type { Light, Placed, Pose, RobotAsset, World } from '../model/types';
 
 const poseXml = (pose: Pose): string => `<pose>${vec(pose.xyz)} ${vec(pose.rpy)}</pose>`;
@@ -37,15 +37,19 @@ function lightXml(light: Light): string {
   return lines.join('\n');
 }
 
-function groundXml(world: World, heightmapFile: string | null, heightmapScale: number): string {
+function groundXml(world: World, heightmapFile: string | null, heightmapSpan: number, heightmapBase: number): string {
   const t = world.terrain;
   const geometry =
     t.kind === 'heightmap' && heightmapFile
-      ? `<heightmap><uri>${heightmapFile}</uri><size>${fmt(t.size[0], 4)} ${fmt(t.size[1], 4)} ${fmt(Math.max(heightmapScale, 1e-3), 4)}</size><pos>0 0 0</pos></heightmap>`
+      ? `<heightmap><uri>${heightmapFile}</uri><size>${fmt(t.size[0], 4)} ${fmt(t.size[1], 4)} ${fmt(heightmapSpan, 4)}</size><pos>0 0 0</pos></heightmap>`
       : `<plane><normal>0 0 1</normal><size>${fmt(t.size[0], 4)} ${fmt(t.size[1], 4)}</size></plane>`;
+  // The image's black is the lowest sample, so the whole model is lifted to it: Gazebo pays no heed to a
+  // <pos> inside <heightmap> (the smoke test found the ground 8 cm low with the lift there).
+  const lift = t.kind === 'heightmap' && heightmapFile && heightmapBase !== 0 ? `      <pose>0 0 ${fmt(heightmapBase, 4)} 0 0 0</pose>\n` : '';
   return [
     '    <model name="ground">',
     '      <static>true</static>',
+    ...(lift ? [lift.trimEnd()] : []),
     '      <link name="link">',
     `        <collision name="collision"><geometry>${geometry}</geometry>${surfaceXml(t.friction)}</collision>`,
     `        <visual name="visual"><geometry>${geometry}</geometry><material><ambient>0.8 0.8 0.8 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material></visual>`,
@@ -117,7 +121,8 @@ function launchPy(worldFile: string, robots: { placed: Placed; asset: RobotAsset
 # from its ROS 2 package at its place, with ros_gz_sim installed:
 #   ros2 launch ${worldFile.replace(/\.sdf$/, '')}.launch.py
 # On a machine without a display, headless:=true runs the server alone. Each robot
-# package's own launch file (bridge, controllers) can be added alongside.
+# package's bridge (config/bridge.yaml) is started with it; controllers from the
+# package's own launch file can be added alongside.
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -135,12 +140,26 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(os.path.join(get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')),
         launch_arguments={'gz_args': [PythonExpression(["'-r -s --headless-rendering' if '", headless, "' == 'true' else '-r'"]), ' ', os.path.join(here, '${worldFile}')]}.items(),
     )
-    return LaunchDescription([
+    nodes = [
         DeclareLaunchArgument('headless', default_value='false', description='Run the Gazebo server without the window'),
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', os.path.join(here, 'models') + os.pathsep + os.environ.get('GZ_SIM_RESOURCE_PATH', '')),
         gz_sim,
 ${spawns}
-    ])
+    ]
+    # A package that carries config/bridge.yaml (PlastikCAD's do) gets its bridge, so cmd_vel, odom and
+    # the sensors reach ROS 2 here as they do from the package's own launch file. Two packages bridging
+    # the same topics would need namespaces; a world holds one robot per package name.
+    for folder in [${robots.map(({ folder }) => `'${folder}'`).join(', ')}]:
+        bridge = os.path.join(here, folder, 'config', 'bridge.yaml')
+        if os.path.exists(bridge):
+            nodes.append(Node(
+                package='ros_gz_bridge',
+                executable='parameter_bridge',
+                name='bridge_' + os.path.basename(folder),
+                parameters=[{'config_file': bridge, 'use_sim_time': True}],
+                output='screen',
+            ))
+    return LaunchDescription(nodes)
 `;
 }
 
@@ -153,17 +172,21 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
   const copies: ExportBundle['copies'] = [];
   const t = world.terrain;
   let heightmapFile: string | null = null;
-  let heightmapScale = t.kind === 'heightmap' ? t.height : 0;
+  let heightmapSpan = 0;
+  let heightmapBase = 0;
   if (t.kind === 'heightmap') {
-    // Gazebo wants a square image of 2^n + 1 pixels, its top row at +Y. It
-    // scales the image by its own brightest pixel, not by white, so the samples
-    // are stretched to full range here and the size's z is the top sample's height.
+    // Gazebo wants a square image of 2^n + 1 pixels, its top row at +Y (the
+    // world's grid is one already; resampling only guards a hand-edited file).
+    // It scales the image by its own brightest pixel, not by white, so the
+    // samples go in stretched from the lowest (black) to the highest (white),
+    // the size's z is their span and the heightmap is lifted to the lowest.
     const n = gazeboSize(Math.max(t.rows, t.cols));
-    const samples = resample(t, n);
-    const top = Math.max(...samples, 1e-6);
-    heightmapScale = top * t.height;
+    const samples = n === t.rows && n === t.cols ? t.heights : resample(t, n);
+    const [lo, hi] = range(samples);
+    heightmapBase = lo;
+    heightmapSpan = Math.max(hi - lo, 1e-3);
     const flipped = new Array<number>(n * n);
-    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) flipped[r * n + c] = samples[(n - 1 - r) * n + c] / top;
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) flipped[r * n + c] = (samples[(n - 1 - r) * n + c] - lo) / heightmapSpan;
     heightmapFile = 'materials/textures/heightmap.png';
     files.push({ path: heightmapFile, bytes: encodeGreyPng(n, n, flipped) });
   }
@@ -193,15 +216,15 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
       continue;
     }
     const folder = `models/${asset.modelName}`;
-    if (!asset.source.path) {
-      notes.push(`${placed.name}: the robot package has no folder on disk to copy, so it was left out.`);
+    if (!assetPresent(asset)) {
+      notes.push(`${placed.name}: the robot package's files are not with this world (import it again), so it was left out.`);
       continue;
     }
     if (asset.format === 'mujoco') {
       notes.push(`${placed.name}: a MuJoCo model cannot be placed in a Gazebo world; export the robot from PlastikCAD as a ROS 2 package or a Gazebo model.`);
       continue;
     }
-    if (claimFolder(copies, asset.source.path, folder) === 'taken') {
+    if (claimFolder(copies, asset.id, folder) === 'taken') {
       notes.push(`${placed.name}: another robot package in this world is also named ${asset.modelName}, so it was left out; rename one in PlastikCAD.`);
       continue;
     }
@@ -224,7 +247,7 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
     <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
     <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
 ${world.lights.map(lightXml).join('\n')}
-${groundXml(world, heightmapFile, heightmapScale)}
+${groundXml(world, heightmapFile, heightmapSpan, heightmapBase)}
 ${[...props, ...includes].join('\n')}
   </world>
 </sdf>

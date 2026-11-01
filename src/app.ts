@@ -15,7 +15,8 @@ export const AUTHOR = 'Andrew O\'Shei';
 export const AUTHOR_URL = 'https://andrewoshei.com';
 /** Marker written into world files, and their extension. */
 export const FILE_FORMAT = 'plastikcad-world';
-export const FILE_VERSION = 1;
+/** 2 carries the assets and the heights (meters) inside the file; 1 kept assets by path and heights as 0..1 of a top height. */
+export const FILE_VERSION = 2;
 export const FILE_EXTENSION = 'plastikworld';
 /** Whether a file name ends in the world extension. */
 export const isWorldName = (name: string): boolean => /\.plastikworld$/i.test(name);

@@ -1,6 +1,6 @@
 # PlastikWorld
 
-The companion app of PlastikCAD, bundled with it (`../Quick_CAD`, its official name is PlastikCAD): PlastikCAD makes objects and robots, this app places them in a world and writes the scene for Gazebo (SDF), MuJoCo (MJCF) and Isaac Sim (USDA). Read `README.md` first, then `docs/plastikworld-handoff.md` for the decisions behind it.
+The companion app of PlastikCAD, bundled with it (`../Quick_CAD`, its official name is PlastikCAD): PlastikCAD makes objects and robots, this app places them in a world and writes the scene for Gazebo (SDF), MuJoCo (MJCF) and Isaac Sim (USDA). Read `README.md` first, then `docs/plastikworld-handoff.md` for the decisions behind it and `docs/plan.md` for the phases the roadmap is built in (Android is a target from phase 1; every phase ends with a check on the tablet).
 
 ## Rules of the house
 
@@ -15,6 +15,6 @@ The companion app of PlastikCAD, bundled with it (`../Quick_CAD`, its official n
 
 ## Checks
 
-`pnpm typecheck && pnpm test && pnpm build`, and `cargo test --manifest-path src-tauri/Cargo.toml` after a change on the Rust side.
+`pnpm typecheck && pnpm test && pnpm build`, and `cargo test --manifest-path src-tauri/Cargo.toml` after a change on the Rust side. A world is one self-contained file (assets and heights inside it, PlastikCAD's project model): keep it that way, since autosave, Android and the coming Drive sync all rest on it. Android is a target from phase 1: `pnpm tauri android dev` on the tablet after a change to files, pickers, layout or touch (`src-tauri/gen/android` is kept, its build output is not).
 
-After a change to a writer, run its export in the real engine: `pnpm smoke:fixtures` writes the sample worlds under `fixtures/out/` (robots from `../Quick_CAD/fixtures/out`), then `pnpm smoke:gazebo` (Docker, PlastikCAD's `plastikcad-ros:jazzy` image), `pnpm smoke:mujoco` (`MUJOCO_PYTHON` or `python3` with mujoco) and `pnpm smoke:isaac` (`ISAACSIM_PYTHON`, default `~/isaacsim-env/bin/python`; pxr checks, then a headless play, which needs `OMNI_KIT_ACCEPT_EULA=YES` in the environment: accepting NVIDIA's EULA is Andrew's call, never set it in a script for them). Each one drops crates where the file says the ground is and reads back where they rest, which is how the engines' heightmap conventions were found and fixed; `tools/*_smoke.py` say what they check.
+After a change to a writer, run its export in the real engine: `pnpm smoke:fixtures` writes the sample worlds under `fixtures/out/` (robots from `../Quick_CAD/fixtures/out`), then `pnpm smoke:gazebo` (Docker, PlastikCAD's `plastikcad-ros:jazzy` image), `pnpm smoke:mujoco` (`MUJOCO_PYTHON` or `python3` with mujoco) and `pnpm smoke:isaac` (`ISAACSIM_PYTHON`, default `~/isaacsim-env/bin/python`; pxr checks, then a headless play, which needs `OMNI_KIT_ACCEPT_EULA=YES` in the environment: accepting NVIDIA's EULA is Andrew's call, never set it in a script for them). Each one drops crates where the file says the ground is and reads back where they rest, which is how the engines' heightmap conventions were found and fixed, then drives each robot forward and checks it went where it was told; `tools/*_smoke.py` say what they check.

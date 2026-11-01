@@ -12,7 +12,13 @@ well (the isaacsim package; ISAACSIM_PYTHON picks the interpreter for pnpm
 smoke:isaac), each stage is then played headless for four seconds, as a user
 would play it after File > Open: a fixed prop must not move, a free prop and
 a probe must rest on the ground at the height the file gives, and the robot
-must stand on it. Exit code 1 on any failure, 2 when pxr is missing.
+must stand on it. Then the robot is driven: the stages PlastikCAD's ROS
+packages carry have no ROS 2 graph (PlastikCAD's own Isaac export does, and
+its smoke:usd drives that over ROS 2), so here every wheel joint of the
+articulation is given a velocity target through PhysX, the way a controller
+would; it must cover the distance along its heading, stay upright and on the
+ground, and climb when it starts on a slope. Exit code 1 on any failure, 2
+when pxr is missing.
 
 The two passes run in separate processes on purpose: Kit brings its own build
 of USD, and a pxr imported before SimulationApp starts leaves Kit's libraries
@@ -22,6 +28,7 @@ the parent only imports pxr once Isaac Sim is up.
 """
 import glob
 import json
+import math
 import os
 import subprocess
 import sys
@@ -41,6 +48,61 @@ def ok(what):
 def resting(z, ground, edge):
     """Whether a crate's origin (the middle of its base) sits on the ground, allowing for a slope and a tumble."""
     return ground - 0.05 - 0.25 * edge <= z <= ground + edge + 0.05
+
+
+def ground_of(terrain, x, y):
+    """The ground height the world file gives at (x, y): bilinear between samples, mirroring io/heightmap.ts heightAt; 0 on a plane or outside."""
+    if terrain['kind'] != 'heightmap':
+        return 0.0
+    rows, cols, size, hs = terrain['rows'], terrain['cols'], terrain['size'], terrain['heights']
+    u = (x / size[0] + 0.5) * (cols - 1)
+    v = (y / size[1] + 0.5) * (rows - 1)
+    if u < 0 or v < 0 or u > cols - 1 or v > rows - 1:
+        return 0.0
+    c0, r0 = min(math.floor(u), cols - 2), min(math.floor(v), rows - 2)
+    fu, fv = u - c0, v - r0
+    h = lambda r, c: hs[r * cols + c]  # noqa: E731
+    top = h(r0, c0) * (1 - fu) + h(r0, c0 + 1) * fu
+    bottom = h(r0 + 1, c0) * (1 - fu) + h(r0 + 1, c0 + 1) * fu
+    # The file's heights are meters (format 2); nothing to scale.
+    return top * (1 - fv) + bottom * fv
+
+
+def judge_drive(name, robot, terrain, before, after, roll, pitch):
+    """What a drive must have done: covered the distance along the heading, kept the robot upright and on the ground, and climbed on the hills."""
+    d = robot['drive']
+    dx, dy = after[0] - before[0], after[1] - before[1]
+    moved = math.hypot(dx, dy)
+    if moved < d['mustMove']:
+        fail(name, f'robot {robot["id"]} moved only {moved:.2f} m in {d["seconds"]} s when driven forward')
+    else:
+        off = abs(math.degrees((math.atan2(dy, dx) - d['heading'] + math.pi) % (2 * math.pi) - math.pi))
+        if off > 45:
+            fail(name, f'robot {robot["id"]} drove {moved:.2f} m but {off:.0f}° off its heading')
+        else:
+            ok(f'robot {robot["id"]} drove {moved:.2f} m along its heading ({off:.0f}° off)')
+    if abs(roll) > 0.5 or abs(pitch) > 0.5:
+        fail(name, f'robot {robot["id"]} tipped over: roll {roll:.2f}, pitch {pitch:.2f} rad')
+    g0, g1 = ground_of(terrain, before[0], before[1]), ground_of(terrain, after[0], after[1])
+    if after[2] < g1 - 0.05:
+        fail(name, f'robot {robot["id"]} is at z = {after[2]:.3f} m, under the ground at {g1:.3f} m')
+    elif after[2] > g1 + 0.5:
+        fail(name, f'robot {robot["id"]} is at z = {after[2]:.3f} m, over the ground at {g1:.3f} m')
+    elif d.get('uphill'):
+        if g1 - g0 < 0.05:
+            fail(name, f'robot {robot["id"]} did not climb: the ground went from {g0:.3f} m to {g1:.3f} m')
+        else:
+            ok(f'robot {robot["id"]} climbed {g1 - g0:.2f} m and stays on the ground (z = {after[2]:.3f} m, ground {g1:.3f} m)')
+    else:
+        ok(f'robot {robot["id"]} stays on the ground (z = {after[2]:.3f} m, ground {g1:.3f} m)')
+
+
+def roll_pitch(q):
+    """Roll and pitch from a wxyz quaternion."""
+    w, x, y, z = q
+    roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    pitch = math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))
+    return roll, pitch
 
 
 def load(root):
@@ -155,6 +217,7 @@ def play(worlds):
 
         for name, spec, path in worlds:
             print(f'\n== {name} ({spec["terrain"]["kind"]}): played in Isaac Sim', flush=True)
+            terrain = spec['terrain']
             opened, stage = stage_utils.open_stage(os.path.abspath(path))
             if not opened or stage is None:
                 fail(name, 'the stage did not open in Isaac Sim')
@@ -214,6 +277,27 @@ def play(worlds):
                         fail(name, f'robot {key} floats at z = {p[2]:.3f} m over ground at {item["ground"]:.3f} m')
                     else:
                         ok(f'robot {key} stands at z = {p[2]:.3f} m, ground {item["ground"]:.3f} m')
+            # The drive: every wheel told the rate, as a velocity controller would set it.
+            t = 4.0
+            for key, (item, view) in tracked.items():
+                if 'edge' in item or not item.get('drive'):
+                    continue
+                spec_drive = item['drive']
+                before = pose(view)
+                n = view.num_dofs
+                # The URDF importer leaves the wheels' drives with almost no damping, so a velocity target
+                # barely bites; PlastikCAD's own USD writer sets effort over rated speed. Set that here.
+                view.set_dof_gains(stiffnesses=[[0.0] * n], dampings=[[0.08 / 20.94] * n])
+                view.set_dof_velocity_targets([[spec_drive['wheelRate']] * n])
+                t += spec_drive['seconds']
+                run_until(t)
+                view.set_dof_velocity_targets([[0.0] * n])
+                t += 0.5
+                run_until(t)
+                positions, orientations = view.get_world_poses()
+                after = np.asarray(positions.numpy()[0], dtype=float)
+                roll, pitch = roll_pitch(np.asarray(orientations.numpy()[0], dtype=float))
+                judge_drive(name, item, terrain, before, after, roll, pitch)
             timeline.stop()
             app.update()
             stage_utils.close_stage()

@@ -1,13 +1,11 @@
-// The files the world's assets refer to, as loaded in this session: a GLB's
-// bytes, a robot's visual meshes. The world file keeps only paths; this cache
-// is what the viewer draws and the writers read. On desktop a world's assets
-// are read back from their paths when it opens; in a browser they must be
-// imported again.
+// The world's assets as loaded in this session: a GLB's triangles, a robot's
+// visual meshes, read from the bytes the world carries. The world file holds
+// the bytes; this cache is what the viewer draws and the writers read.
 import { loadGlb, meshDataOf } from '../io/meshes';
 import { boundsOf } from '../io/export';
 import type { ResolvedMesh } from '../io/export';
+import { assetPresent } from '../model/types';
 import type { Asset, MeshAsset, Pose, RobotAsset, Vec3 } from '../model/types';
-import * as platform from '../platform';
 import { visualsOf } from '../robot/package';
 import type { PackageFiles } from '../robot/package';
 
@@ -45,14 +43,29 @@ export function forget(id: string): void {
   }
 }
 
-export function keepGlb(asset: MeshAsset, bytes: Uint8Array): void {
-  set(asset.id, { kind: 'glb', bytes, resolved: null });
+/** A package's files as the readers want them, from the map the world carries. */
+export const packageFiles = (files: Record<string, Uint8Array>): PackageFiles => ({ paths: Object.keys(files), read: async (p) => files[p] ?? Promise.reject(new Error(`${p} is not in the package`)) });
+
+/** Reads every file of a picked package folder into the map a world carries. */
+export async function collectFiles(files: PackageFiles): Promise<Record<string, Uint8Array>> {
+  const out: Record<string, Uint8Array> = {};
+  for (const path of files.paths) out[path.replace(/\\/g, '/')] = await files.read(path);
+  return out;
+}
+
+export function keepGlb(asset: MeshAsset): void {
+  set(asset.id, assetPresent(asset) ? { kind: 'glb', bytes: asset.data, resolved: null } : { kind: 'missing' });
 }
 
 /** The robot's visual meshes, read from its package files and placed in its frame. Meshes other than OBJ are skipped. */
-export async function keepRobot(asset: RobotAsset, files: PackageFiles): Promise<string[]> {
+export async function keepRobot(asset: RobotAsset): Promise<string[]> {
   const notes: string[] = [];
   const parts: RobotPart[] = [];
+  if (!assetPresent(asset)) {
+    set(asset.id, { kind: 'missing' });
+    return notes;
+  }
+  const files = packageFiles(asset.files);
   try {
     const entry = await files.read(asset.entry);
     const paths = new Set(files.paths);
@@ -76,23 +89,18 @@ export async function keepRobot(asset: RobotAsset, files: PackageFiles): Promise
   return notes;
 }
 
-/** Reads an opened world's assets back from disk (desktop); marks the ones that cannot be read. */
+/** Loads an opened world's assets from the bytes it carries; says which ones carry none. */
 export async function restoreAssets(assets: Asset[]): Promise<string[]> {
   const notes: string[] = [];
   for (const asset of assets) {
     if (cache.has(asset.id)) continue;
-    if (!asset.source.path || !platform.isDesktop()) {
+    if (!assetPresent(asset)) {
       set(asset.id, { kind: 'missing' });
-      if (!platform.isDesktop()) notes.push(`${asset.name}: import it again to see it (a browser cannot read files by path).`);
+      notes.push(`${asset.name}: its file is not with this world; import it again.`);
       continue;
     }
-    try {
-      if (asset.kind === 'mesh') keepGlb(asset, (await platform.readPath(asset.source.path)).bytes);
-      else notes.push(...(await keepRobot(asset, (await platform.folderAt(asset.source.path)).files)));
-    } catch (err) {
-      set(asset.id, { kind: 'missing' });
-      notes.push(`${asset.name}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    if (asset.kind === 'mesh') keepGlb(asset);
+    else notes.push(...(await keepRobot(asset)));
   }
   return notes;
 }

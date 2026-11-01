@@ -3,10 +3,10 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { Light, World } from '../model/types';
 import { assetEpoch, loadedAsset, subscribeAssets } from '../state/assets';
 import { SNAP_STEPS } from '../state/persist';
-import { beginGesture, cancelPlacing, deleteSelected, duplicateSelected, endGesture, moveBy, placeAt, redo, select, setPrefs, undo, useEditor } from '../state/store';
+import { beginGesture, cancelPlacing, deleteSelected, duplicateSelected, endGesture, moveBy, placeAt, provideThumbnail, redo, select, setPrefs, showPanel, undo, useEditor } from '../state/store';
 import { GIZMO_SIZE, Viewer } from '../viewer/Viewer';
 import type { ViewItem, ViewPreset, Visual } from '../viewer/Viewer';
-import { CloseIcon, DuplicateIcon, FitIcon, GridIcon, RedoIcon, TrashIcon, UndoIcon } from './icons';
+import { CloseIcon, DuplicateIcon, FitIcon, GridIcon, MenuIcon, RedoIcon, SlidersIcon, TrashIcon, UndoIcon } from './icons';
 
 const VIEWS: { id: ViewPreset; label: string }[] = [
   { id: 'iso', label: 'Iso' },
@@ -71,7 +71,9 @@ export function Viewport() {
       { theme: prefs.theme, grid: prefs.grid, snap: prefs.snap },
     );
     viewerRef.current = v;
+    provideThumbnail(() => v.snapshot());
     return () => {
+      provideThumbnail(null);
       v.dispose();
       viewerRef.current = null;
     };
@@ -89,6 +91,9 @@ export function Viewport() {
   return (
     <div className="viewport" ref={host}>
       <div className="toolbar">
+        <button type="button" className="chip icon narrow-only" title="World and objects" aria-label="Show the world panel" onClick={() => showPanel('sidebar')}>
+          <MenuIcon />
+        </button>
         <button type="button" className="chip icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!canUndo} onClick={undo}>
           <UndoIcon />
         </button>
@@ -113,6 +118,9 @@ export function Viewport() {
             </option>
           ))}
         </select>
+        <button type="button" className="chip icon narrow-only" title="Properties" aria-label="Show the properties panel" onClick={() => showPanel('inspector')}>
+          <SlidersIcon />
+        </button>
       </div>
       {empty && !placing && (
         <div className="stage-empty">

@@ -3,11 +3,12 @@
 // each, since MuJoCo reads no GLB), and each robot brought in by attaching its
 // own model file, so its actuators and sensors come along and its floor does not.
 import { quatOf } from '../model/math';
-import { assetOf } from '../model/types';
+import { assetOf, assetPresent } from '../model/types';
 import type { Light, World } from '../model/types';
 import { bundleName, claimFolder, escapeXml, fmt, vec } from './export';
 import type { ExportBundle, ExportFile, Resolved } from './export';
 import { identifier } from './format';
+import { range } from './heightmap';
 import { writeObj } from './obj';
 
 const TIMESTEP = 0.002;
@@ -38,12 +39,12 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
     // -Y first, and it stretches the samples to 0..1 before scaling them by the
     // z size, so the rows are flipped and the geom is lifted to the lowest sample
     // with the z size cut to the span, which keeps every height where the file has it.
-    const lo = Math.min(...t.heights), hi = Math.max(...t.heights);
-    const span = Math.max((hi - lo) * t.height, 1e-3);
+    const [lo, hi] = range(t.heights);
+    const span = Math.max(hi - lo, 1e-3);
     const rows: string[] = [];
-    for (let r = t.rows - 1; r >= 0; r--) rows.push(t.heights.slice(r * t.cols, (r + 1) * t.cols).map((v) => v.toFixed(3)).join(' '));
+    for (let r = t.rows - 1; r >= 0; r--) rows.push(Array.from(t.heights.subarray(r * t.cols, (r + 1) * t.cols), (v) => v.toFixed(3)).join(' '));
     assets.push(`    <hfield name="terrain" nrow="${t.rows}" ncol="${t.cols}" size="${fmt(half[0], 4)} ${fmt(half[1], 4)} ${fmt(span, 4)} 0.02" elevation="${rows.join('  ')}"/>`);
-    bodies.push(`    <geom name="floor" type="hfield" hfield="terrain" pos="0 0 ${fmt(lo * t.height, 4)}" material="floor" ${frictionAttr(t.friction)}/>`);
+    bodies.push(`    <geom name="floor" type="hfield" hfield="terrain" pos="0 0 ${fmt(lo, 4)}" material="floor" ${frictionAttr(t.friction)}/>`);
   } else {
     bodies.push(`    <geom name="floor" type="plane" size="${fmt(half[0], 4)} ${fmt(half[1], 4)} 0.1" material="floor" ${frictionAttr(t.friction)}/>`);
   }
@@ -90,8 +91,8 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
       notes.push(`${placed.name}: not a MuJoCo model; export the robot from PlastikCAD as a MuJoCo model to place it here.`);
       continue;
     }
-    if (!asset.source.path) {
-      notes.push(`${placed.name}: the robot model has no folder on disk to copy, so it was left out.`);
+    if (!assetPresent(asset)) {
+      notes.push(`${placed.name}: the robot model's files are not with this world (import it again), so it was left out.`);
       continue;
     }
     if (!asset.rootBody) {
@@ -99,7 +100,7 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
       continue;
     }
     const folder = `robots/${asset.modelName}`;
-    if (claimFolder(copies, asset.source.path, folder) === 'taken') {
+    if (claimFolder(copies, asset.id, folder) === 'taken') {
       notes.push(`${placed.name}: another robot model in this world is also named ${asset.modelName}, so it was left out; rename one in PlastikCAD.`);
       continue;
     }

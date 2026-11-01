@@ -4,7 +4,7 @@
 // rigid bodies, and each robot referenced from the USD stage its PlastikCAD
 // package carries (Isaac's URDF importer wrote it).
 import { degrees } from '../model/math';
-import { assetOf } from '../model/types';
+import { assetOf, assetPresent } from '../model/types';
 import type { Light, Placed, Pose, Terrain, Vec3, World } from '../model/types';
 import { bundleName, claimFolder, fmt } from './export';
 import type { ExportBundle, ExportFile, MeshData, Resolved } from './export';
@@ -58,14 +58,14 @@ function groundMesh(terrain: Terrain): MeshData {
       colors: null,
     };
   }
-  const { rows, cols, heights, height } = terrain;
+  const { rows, cols, heights } = terrain;
   const positions = new Float32Array(rows * cols * 3);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const i = (r * cols + c) * 3;
       positions[i] = (c / (cols - 1) - 0.5) * sx;
       positions[i + 1] = (r / (rows - 1) - 0.5) * sy;
-      positions[i + 2] = heights[r * cols + c] * height;
+      positions[i + 2] = heights[r * cols + c];
     }
   }
   const indices = new Uint32Array((rows - 1) * (cols - 1) * 6);
@@ -154,12 +154,12 @@ export function isaacBundle(world: World, resolved: Resolved): ExportBundle {
       notes.push(`${placed.name}: the robot package carries no USD stage; import the robot's URDF with Isaac's importer and reference the result here.`);
       continue;
     }
-    if (!asset.source.path) {
-      notes.push(`${placed.name}: the robot package has no folder on disk to copy, so it was left out.`);
+    if (!assetPresent(asset)) {
+      notes.push(`${placed.name}: the robot package's files are not with this world (import it again), so it was left out.`);
       continue;
     }
     const folder = `robots/${asset.modelName}`;
-    if (claimFolder(copies, asset.source.path, folder) === 'taken') {
+    if (claimFolder(copies, asset.id, folder) === 'taken') {
       notes.push(`${placed.name}: another robot package in this world is also named ${asset.modelName}, so it was left out; rename one in PlastikCAD.`);
       continue;
     }

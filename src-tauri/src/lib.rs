@@ -3,17 +3,22 @@
 // and copying files. Files go through the commands below rather than the fs
 // plugin's own, whose scope would refuse a world passed on the command line:
 // the app is a document editor, and may open whatever the user points it at.
+// The fs plugin is still used from here to open what the Android pickers hand
+// back, which are content URIs rather than paths. The Android pieces are
+// PlastikCAD's (its `src-tauri/src/lib.rs` and `plugins/device`), lifted whole.
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
 use tauri_plugin_opener::OpenerExt;
 
 const WORLD_EXTENSION: &str = "plastikworld";
@@ -92,9 +97,144 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
+/// A path or, from the Android pickers, a `content://` URI.
+fn file_path(path: &str) -> FilePath {
+    let Ok(parsed) = FilePath::from_str(path);
+    parsed
+}
+
 #[tauri::command]
-async fn read_file(path: String) -> Result<Response, String> {
-    fs::read(&path).map(Response::new).map_err(|err| format!("Could not read {path}: {err}"))
+async fn read_file(app: AppHandle, path: String) -> Result<Response, String> {
+    let read = app.fs().read(file_path(&path));
+    #[cfg(target_os = "android")]
+    let read = read.or_else(|err| {
+        // A file of the app's own in the shared storage that the path would not open is reached through the media store.
+        match if path.contains("://") { None } else { tauri_plugin_device::find_document(&app, &path) } {
+            Some(uri) => app.fs().read(file_path(&uri)),
+            None => Err(err),
+        }
+    });
+    read.map(Response::new).map_err(|err| format!("Could not read {path}: {err}"))
+}
+
+/// Where a file really is: a path names itself; the `content://` URIs the
+/// Android pickers hand out do not (a download is `msf:123`), but the
+/// descriptor the provider opens usually points at the real file. Null where
+/// it cannot be told.
+#[tauri::command]
+fn real_path(app: AppHandle, path: String) -> Option<String> {
+    let parsed = file_path(&path);
+    if let Ok(path) = parsed.clone().into_path() {
+        return Some(path.to_string_lossy().into_owned());
+    }
+    #[cfg(target_os = "android")]
+    {
+        use std::os::fd::AsRawFd;
+        let mut options = OpenOptions::new();
+        options.read(true);
+        let file = app.fs().open(parsed, options).ok()?;
+        let target = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()?;
+        let target = target.to_string_lossy().into_owned();
+        // The descriptor points into the system's own mount of the shared storage (`/mnt/user/0/emulated/0/…`),
+        // which apps may not open; the same file is at `/storage/emulated/0/…`.
+        return Some(match target.find("/emulated/") {
+            Some(at) if !target.starts_with("/storage/") => format!("/storage{}", &target[at..]),
+            _ => target,
+        });
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = app;
+        None
+    }
+}
+
+/// The name of a file, extension included, or null if it has none.
+#[tauri::command]
+fn file_name(app: AppHandle, path: String) -> Option<String> {
+    let real = real_path(app, path)?;
+    Path::new(&real).file_name().map(|name| name.to_string_lossy().into_owned()).filter(|name| name.contains('.'))
+}
+
+/// A temporary file of the app's own holding `bytes`, for the device plugin to move into place.
+#[cfg(target_os = "android")]
+fn stage_bytes(app: &AppHandle, bytes: &[u8]) -> io::Result<PathBuf> {
+    let dir = app.path().app_cache_dir().map_err(io::Error::other)?;
+    fs::create_dir_all(&dir)?;
+    let stamp = UNIX_EPOCH.elapsed().map(|d| d.as_nanos()).unwrap_or(0);
+    let source = dir.join(format!("document-{stamp}.tmp"));
+    fs::write(&source, bytes)?;
+    Ok(source)
+}
+
+/// Android: writes an export into the app's folder in Downloads. The bytes are
+/// the request body; `folder`, `name` and `mime` travel in headers, percent-encoded.
+#[tauri::command]
+async fn save_export(app: AppHandle, request: Request<'_>) -> Result<tauri_plugin_device::Exported, String> {
+    let header = |key: &str| request.headers().get(key).and_then(|value| percent_decode(value.as_bytes()));
+    let (folder, name, mime) = (header("folder").unwrap_or_default(), header("name"), header("mime"));
+    let (Some(name), Some(mime)) = (name, mime) else {
+        return Err("Could not write the export: no name was given".into());
+    };
+    let bytes = body_bytes(request.body()).ok_or("Could not write the export: the data was not understood")?;
+    #[cfg(target_os = "android")]
+    {
+        let source = stage_bytes(&app, &bytes).map_err(|err| format!("Could not write {name}: {err}"))?;
+        return tauri_plugin_device::export_to_downloads(&app, &folder, &name, &mime, &source).map_err(|err| format!("Could not write {name}: {err}"));
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (app, folder, name, mime, bytes);
+        Err("Exports go to Downloads only on Android".into())
+    }
+}
+
+/// Writes the request body into `share/<name>` under the app's cache folder,
+/// for the device plugin to hand to other apps, and returns its path. The
+/// name travels in a header, percent-encoded. Earlier staged files go.
+#[tauri::command]
+async fn stage_share(app: AppHandle, request: Request<'_>) -> Result<String, String> {
+    let name = request
+        .headers()
+        .get("name")
+        .and_then(|value| percent_decode(value.as_bytes()))
+        .filter(|name| !name.is_empty() && !name.contains(['/', '\\']))
+        .ok_or("Could not prepare the file to share: no valid name was given")?;
+    let bytes = body_bytes(request.body()).ok_or_else(|| format!("Could not prepare {name}: the data was not bytes"))?;
+    let dir = app.path().app_cache_dir().map_err(|err| format!("Could not prepare {name}: {err}"))?.join("share");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).map_err(|err| format!("Could not prepare {name}: {err}"))?;
+    let path = dir.join(&name);
+    fs::write(&path, &bytes).map_err(|err| format!("Could not prepare {name}: {err}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn write_bytes(app: &AppHandle, path: &str, bytes: &[u8]) -> io::Result<()> {
+    let parsed = file_path(path);
+    match parsed.clone().into_path() {
+        Ok(path) => write_atomic(&path, bytes),
+        Err(_) => write_document(app, path, bytes),
+    }
+}
+
+/// A document picked on Android: the bytes go to a file of the app's own
+/// first, and the plugin copies them in through the document's provider, so
+/// the provider learns the new size (through a raw descriptor it would not,
+/// and the Files app would show the export as 0 B).
+#[cfg(target_os = "android")]
+fn write_document(app: &AppHandle, uri: &str, bytes: &[u8]) -> io::Result<()> {
+    let source = stage_bytes(app, bytes)?;
+    tauri_plugin_device::write_document(app, uri, &source).map_err(io::Error::other)
+}
+
+#[cfg(not(target_os = "android"))]
+fn write_document(app: &AppHandle, uri: &str, bytes: &[u8]) -> io::Result<()> {
+    // Elsewhere a URL names a file; written through the descriptor the fs plugin opens.
+    let mut options = OpenOptions::new();
+    options.read(false).write(true).truncate(true).create(true);
+    let mut file = app.fs().open(file_path(uri), options)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// The bytes of a request body: raw, or, where the webview cannot post a
@@ -117,14 +257,14 @@ fn body_bytes(body: &InvokeBody) -> Option<Cow<'_, [u8]>> {
 /// The file's bytes are the request body and its path is in the `path` header,
 /// which spares a multi-megabyte mesh a round trip through JSON.
 #[tauri::command]
-async fn write_file(request: Request<'_>) -> Result<(), String> {
+async fn write_file(app: AppHandle, request: Request<'_>) -> Result<(), String> {
     let path = request
         .headers()
         .get("path")
         .and_then(|value| percent_decode(value.as_bytes()))
         .ok_or("Could not write the file: no valid path was given")?;
     let bytes = body_bytes(request.body()).ok_or_else(|| format!("Could not write {path}: the data was not bytes"))?;
-    write_atomic(Path::new(&path), &bytes).map_err(|err| format!("Could not write {path}: {err}"))
+    write_bytes(&app, &path, &bytes).map_err(|err| format!("Could not write {path}: {err}"))
 }
 
 /// A world in the worlds folder, as the browser lists it.
@@ -173,6 +313,38 @@ fn worlds_in(dir: &Path) -> io::Result<Vec<WorldEntry>> {
 #[tauri::command]
 async fn list_worlds(dir: String) -> Result<Vec<WorldEntry>, String> {
     worlds_in(Path::new(&dir)).map_err(|err| format!("Could not read the worlds folder {dir}: {err}"))
+}
+
+/// The first `limit` bytes of a file: a world's header, for the worlds browser,
+/// without reading the assets behind it.
+#[tauri::command]
+async fn read_head(path: String, limit: u64) -> Result<Response, String> {
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .and_then(|file| file.take(limit).read_to_end(&mut bytes))
+        .map(|_| Response::new(bytes))
+        .map_err(|err| format!("Could not read {path}: {err}"))
+}
+
+/// Moves a file, within a folder or to another one, never over an existing file.
+fn move_path(from: &Path, to: &Path) -> io::Result<()> {
+    if to.exists() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "a file of that name already exists"));
+    }
+    if fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    // Another file system: copy, then remove the original once the copy is whole.
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(from, to)?;
+    fs::remove_file(from)
+}
+
+#[tauri::command]
+async fn move_file(from: String, to: String) -> Result<(), String> {
+    move_path(Path::new(&from), Path::new(&to)).map_err(|err| format!("Could not move {from} to {to}: {err}"))
 }
 
 /// Every file under `dir`, as paths relative to it with `/` separators, hidden
@@ -245,13 +417,20 @@ struct WorldsHome {
 #[tauri::command]
 fn default_worlds_dir(app: AppHandle) -> Result<WorldsHome, String> {
     let paths = app.path();
-    let dir = paths
-        .document_dir()
-        .map(|dir| dir.join("PlastikCAD Worlds"))
-        .or_else(|_| paths.app_data_dir().map(|dir| dir.join("worlds")));
+    // On Android worlds stay in the app's own storage, as PlastikCAD's projects do: there is no folder to pick.
+    #[cfg(mobile)]
+    let (dir, fixed) = (paths.app_data_dir().map(|dir| dir.join("worlds")), true);
+    #[cfg(not(mobile))]
+    let (dir, fixed) = (
+        paths
+            .document_dir()
+            .map(|dir| dir.join("PlastikCAD Worlds"))
+            .or_else(|_| paths.app_data_dir().map(|dir| dir.join("worlds"))),
+        false,
+    );
     dir.map_err(|err| format!("Could not find a place for worlds: {err}"))
         .and_then(|dir| dir.into_os_string().into_string().map_err(|_| "The worlds folder has an unreadable name".to_owned()))
-        .map(|path| WorldsHome { path, fixed: false })
+        .map(|path| WorldsHome { path, fixed })
 }
 
 /// Shows a file or folder in the system's file manager, or opens a link in the browser.
@@ -285,11 +464,19 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_device::init())
         .invoke_handler(tauri::generate_handler![
             read_file,
+            file_name,
+            real_path,
+            save_export,
+            stage_share,
             write_file,
             list_worlds,
+            read_head,
+            move_file,
             read_tree,
             copy_tree,
             remove_file,

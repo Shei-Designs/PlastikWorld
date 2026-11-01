@@ -666,14 +666,14 @@ export class Viewer {
     const material = new MeshStandardMaterial({ color: t.ground, roughness: 0.95, metalness: 0, flatShading: terrain.kind === 'heightmap', side: DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
     let geometry: PlaneGeometry;
     if (terrain.kind === 'heightmap') {
-      const { rows, cols, heights, height, size } = terrain;
+      const { rows, cols, heights, size } = terrain;
       geometry = new PlaneGeometry(size[0], size[1], cols - 1, rows - 1);
       const pos = geometry.getAttribute('position') as BufferAttribute;
       for (let v = 0; v < pos.count; v++) {
         // Rows run along Y from -Y in the world; a PlaneGeometry's vertices run from +Y down.
         const j = Math.round((pos.getX(v) / size[0] + 0.5) * (cols - 1));
         const i = Math.round((pos.getY(v) / size[1] + 0.5) * (rows - 1));
-        pos.setZ(v, heights[i * cols + j] * height);
+        pos.setZ(v, heights[i * cols + j]);
       }
       geometry.computeVertexNormals();
     } else {
@@ -959,6 +959,31 @@ export class Viewer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.draw();
+  }
+
+  /**
+   * A small JPEG of the view, for the worlds browser: drawn afresh without
+   * the triad and read back at once, which needs no preserved drawing buffer.
+   */
+  snapshot(size = 320): string | null {
+    const { width, height, renderer, camera } = this;
+    if (!width || !height || !this.ok) return null;
+    try {
+      renderer.setViewport(0, 0, width, height);
+      renderer.render(this.scene, camera);
+      const canvas = document.createElement('canvas');
+      const scale = Math.min(1, size / Math.max(width, height));
+      canvas.width = Math.max(1, Math.round(renderer.domElement.width * scale));
+      canvas.height = Math.max(1, Math.round(renderer.domElement.height * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(renderer.domElement, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.8);
+    } catch {
+      return null;
+    } finally {
+      this.draw();
+    }
   }
 
   private draw(): void {

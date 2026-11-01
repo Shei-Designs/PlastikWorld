@@ -1,0 +1,15 @@
+[package]
+name = "tauri-plugin-device"
+version = "0.1.0"
+description = "What PlastikWorld runs on: the keyboard and keypad it is driven with, and the documents Android hands it"
+authors = ["Andrew O'Shei"]
+license = "GPL-3.0-or-later"
+edition = "2021"
+links = "tauri-plugin-device"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

@@ -16,12 +16,14 @@ import {
   receiveFiles,
   redo,
   restoreSession,
-  saveAs,
+  saveCopy,
   saveNow,
+  saveWorld,
   select,
   selectAll,
   showAbout,
   showExport,
+  showPanel,
   titleOf,
   undo,
   useEditor,
@@ -56,7 +58,7 @@ function onKeyDown(e: KeyboardEvent): void {
   // File commands work everywhere, including from inside a text box.
   if (mod && !e.altKey) {
     const command =
-      key === 's' ? (e.shiftKey ? saveAs : saveNow) : key === 'o' ? (e.shiftKey ? openWorldFile : openWorlds) : key === 'n' ? newWorld : key === 'i' ? (e.shiftKey ? importRobot : importObjects) : key === 'e' ? () => showExport(true) : null;
+      key === 's' ? (e.shiftKey ? saveCopy : saveNow) : key === 'o' ? (e.shiftKey ? openWorldFile : openWorlds) : key === 'n' ? newWorld : key === 'i' ? (e.shiftKey ? importRobot : importObjects) : key === 'e' ? () => showExport(true) : null;
     if (command) {
       e.preventDefault();
       commitTyping();
@@ -134,6 +136,7 @@ export default function App() {
   const theme = useEditor((s) => s.prefs.theme);
   const title = useEditor((s) => titleOf(s.world));
   const about = useEditor((s) => s.about);
+  const panel = useEditor((s) => s.panel);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -144,22 +147,32 @@ export default function App() {
   useEffect(() => {
     window.addEventListener('keydown', onKeyDown);
     const stopDrops = platform.onFilesDropped((files) => void receiveFiles(files));
-    const stopClose = platform.guardClose(isDirty, saveNow);
+    // Android: a world or a package tapped in the Files app while the app is open.
+    const stopOpened = platform.onFilesOpened((paths) => void Promise.all(paths.map((p) => platform.readPath(p))).then(receiveFiles).catch(console.error));
+    const stopClose = platform.guardClose(isDirty, () => saveWorld(true));
+    // A world is saved as you work; the window going out of sight is a moment not to wait for the timer.
+    const onHide = () => {
+      if (document.hidden) void saveWorld();
+    };
+    document.addEventListener('visibilitychange', onHide);
     void restoreSession();
     return () => {
       window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('visibilitychange', onHide);
+      stopOpened();
       stopDrops();
       stopClose();
     };
   }, []);
 
   return (
-    <div className="app">
+    <div className={`app${panel ? ` show-${panel}` : ''}`}>
       <Sidebar />
       <main className="stage">
         <Viewport />
       </main>
       <Inspector />
+      {panel && <div className="panel-backdrop" onClick={() => showPanel(null)} />}
       <Toast />
       <About open={about} onClose={() => showAbout(false)} />
       <ExportDialog />

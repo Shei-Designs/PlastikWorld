@@ -1,8 +1,9 @@
 // The right panel: what is picked, with its numbers.
-import { heightAt, rollingField } from '../io/heightmap';
-import { assetOf } from '../model/types';
+import { heightAt, range, resample, rollingField } from '../io/heightmap';
+import { GRID_MAX, GRID_SIZES, assetOf } from '../model/types';
 import type { Light, LightKind, Placed, SpawnPoint, Terrain, World } from '../model/types';
 import { deleteSelected, duplicateSelected, setTerrainKind, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
 
@@ -137,6 +138,9 @@ function SpawnPanel({ spawn }: { spawn: SpawnPoint }) {
 
 function TerrainPanel({ terrain }: { terrain: Terrain }) {
   const update = (patch: Partial<Terrain>) => updateTerrain({ ...terrain, ...patch } as Terrain);
+  // How tall the next generated field is; not part of the world, so it lives here.
+  const [amplitude, setAmplitude] = useState(1.5);
+  const [lo, hi] = terrain.kind === 'heightmap' ? range(terrain.heights) : [0, 0];
   return (
     <div className="params">
       <Head title="Terrain" note="The ground every engine stands the world on" />
@@ -157,24 +161,42 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
       {terrain.kind === 'heightmap' && (
         <>
           <h2>Heights</h2>
-          <NumberField label="Highest point" unit="m" value={terrain.height} min={0} step={0.1} decimals={2} onChange={(height) => update({ height })} />
+          <SelectField
+            label="Samples"
+            value={String(terrain.rows)}
+            options={GRID_SIZES.map((n) => ({ id: String(n), label: `${n} × ${n}${n > GRID_MAX ? ' (slow in Isaac Sim)' : ''}` }))}
+            onChange={(v) => {
+              const n = Number(v);
+              updateTerrain({ ...terrain, rows: n, cols: n, heights: resampleTo(terrain, n) });
+            }}
+          />
           <dl className="info-rows">
-            <dt>Samples</dt>
+            <dt>Spacing</dt>
             <dd>
-              {terrain.cols} × {terrain.rows}
+              {((terrain.size[0] / (terrain.cols - 1)) * 100).toFixed(1)} × {((terrain.size[1] / (terrain.rows - 1)) * 100).toFixed(1)} cm
+            </dd>
+            <dt>Lowest, highest</dt>
+            <dd>
+              {lo.toFixed(2)} m, {hi.toFixed(2)} m
             </dd>
             <dt>At the origin</dt>
             <dd>{heightAt(terrain, 0, 0).toFixed(3)} m</dd>
           </dl>
-          <button type="button" className="chip" onClick={() => update({ heights: rollingField(terrain.rows, terrain.cols) })}>
+          <NumberField label="Field height" unit="m" value={amplitude} min={0} step={0.1} decimals={2} onChange={setAmplitude} />
+          <button type="button" className="chip" onClick={() => update({ heights: rollingField(terrain.rows, terrain.cols, amplitude) })}>
             Regenerate the field
           </button>
-          <p className="note">Gazebo reads the terrain from an image, MuJoCo from the heights inline, Isaac from a mesh: one source, three writers. Importing a heightmap image is on the roadmap.</p>
+          <p className="note">
+            The grid is 2^n + 1 samples a side so that Gazebo, MuJoCo and Isaac Sim all get the very same heights; past {GRID_MAX} the Isaac stage's ground mesh gets heavy. Sculpting and importing heightmaps are the next steps on the roadmap.
+          </p>
         </>
       )}
     </div>
   );
 }
+
+/** The heights on an `n` × `n` grid, bilinear. */
+const resampleTo = (terrain: Extract<Terrain, { kind: 'heightmap' }>, n: number): Float32Array => resample(terrain, n);
 
 function WorldPanel({ world }: { world: World }) {
   return (

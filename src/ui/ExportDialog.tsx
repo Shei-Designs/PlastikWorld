@@ -67,7 +67,7 @@ export function ExportDialog() {
               ))}
               {preview.copies.map((c) => (
                 <li key={c.to}>
-                  {preview.name}/{c.to}/ (copied from {c.from})
+                  {preview.name}/{c.to}/ (the robot package)
                 </li>
               ))}
             </ul>

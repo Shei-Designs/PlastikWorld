@@ -7,11 +7,11 @@
 // checks that the bundles build. The robots come from PlastikCAD's reference
 // fixtures (ROBOT_FIXTURES, default ../Quick_CAD/fixtures/out); when those
 // are missing the worlds hold props only.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { emptyWorld } from '../model/types';
-import type { Asset, Placed, Terrain, Vec3, World } from '../model/types';
+import type { Asset, Placed, RobotFormat, Terrain, Vec3, World } from '../model/types';
 import { serializeWorld } from '../model/file';
 import { inspectPackage } from '../robot/package';
 import type { PackageFiles } from '../robot/package';
@@ -130,21 +130,72 @@ function folderFiles(dir: string): PackageFiles {
 }
 
 // The Gazebo model and the ROS package are both named reference_rover, and a
-// world's bundle has one folder per name, so each goes in a world of its own.
+// world's bundle has one folder per name: Gazebo takes the model on the hills
+// and leaves the package out with a note, while Isaac, which reads the package
+// alone, gets a hill to climb from it. The yaw is for the flat yard; on the
+// hills each rover is turned to face uphill.
 const ROVERS: { id: string; folder: string; worlds: string[]; place: Vec3; yaw: number }[] = [
   { id: 'rover_sdf', folder: 'sdf/reference_rover', worlds: ['Smoke Hills'], place: [0, 0, 0], yaw: 0 },
-  { id: 'rover_ros', folder: 'ros/reference_rover', worlds: ['Smoke Flat'], place: [0, 0, 0], yaw: 1 },
+  { id: 'rover_ros', folder: 'ros/reference_rover', worlds: ['Smoke Flat', 'Smoke Hills'], place: [0, 0, 0], yaw: 1 },
   { id: 'rover_mjcf', folder: 'reference_rover', worlds: ['Smoke Flat', 'Smoke Hills'], place: [0, -4, 0], yaw: -1 },
 ];
+
+/**
+ * Which way a robot's "forward" points in its own frame, as an angle from its
+ * +X axis: a ROS package faces +X (base_footprint, as ROS expects, and the
+ * URDF importer keeps it for Isaac); PlastikCAD's Gazebo model and MuJoCo
+ * exports keep the design axes, where forward is +Y (the Gazebo smoke test
+ * found this: the model drove 90° off an +X heading).
+ */
+const forwardOf = (format: RobotFormat): number => (format === 'ros' ? 0 : Math.PI / 2);
+
+/** The direction of steepest ascent at (x, y), as a yaw; 0 on flat ground. */
+function uphill(terrain: Terrain, x: number, y: number): number {
+  const d = 0.5;
+  const gx = heightAt(terrain, x + d, y) - heightAt(terrain, x - d, y);
+  const gy = heightAt(terrain, x, y + d) - heightAt(terrain, x, y - d);
+  return Math.hypot(gx, gy) < 1e-6 ? 0 : Math.atan2(gy, gx);
+}
+
+/** How a smoke test drives a robot: a twist on cmd_vel where the engine takes one, the wheels told a rate where it does not. */
+const DRIVE = { speed: 0.4, wheelRate: 20, seconds: 4, mustMove: 1.0 };
+
+/**
+ * Where to start a rover on the hills: a spot on a steady, moderate slope
+ * (the middle of the field is a clearing), clear of everything placed and
+ * with the way uphill clear too, so that driven forward for the test it
+ * visibly climbs without having to clear a crate.
+ */
+function slopeSpot(terrain: Terrain, taken: [number, number][]): [number, number] {
+  const clear = (x: number, y: number, r: number) => taken.every(([tx, ty]) => Math.hypot(tx - x, ty - y) >= r);
+  for (let x = -8; x <= 8; x += 0.5) {
+    for (let y = -8; y <= 8; y += 0.5) {
+      const yaw = uphill(terrain, x, y);
+      const rise = (d: number) => heightAt(terrain, x + d * Math.cos(yaw), y + d * Math.sin(yaw)) - heightAt(terrain, x, y);
+      const slope = rise(1) - rise(0);
+      if (slope < 0.06 || slope > 0.14) continue;
+      if (Math.abs(x + 3 * Math.cos(yaw)) > 9 || Math.abs(y + 3 * Math.sin(yaw)) > 9) continue;
+      // A steady climb all the way: higher at every meter along the path.
+      if (!(rise(1) < rise(2) && rise(2) < rise(3) && rise(3) > 0.15)) continue;
+      if (![0, 1, 2, 3].every((d) => clear(x + d * Math.cos(yaw), y + d * Math.sin(yaw), 1.5))) continue;
+      return [x, y];
+    }
+  }
+  throw new Error('no slope on the hills to start a rover on');
+}
 
 async function robotAssets(): Promise<Asset[]> {
   const assets: Asset[] = [];
   for (const rover of ROVERS) {
     const dir = join(ROBOTS, rover.folder);
     if (!existsSync(dir)) continue;
-    const info = await inspectPackage(folderFiles(dir));
+    const folder = folderFiles(dir);
+    const info = await inspectPackage(folder);
     if (!info) throw new Error(`${dir} is not a robot package`);
-    assets.push({ kind: 'robot', id: rover.id, name: `Rover ${info.format.toUpperCase()}`, format: info.format, source: { name: rover.folder.split('/').pop()!, path: dir, size: 0 }, modelName: info.modelName, entry: info.entry, rootBody: info.rootBody, usd: info.usd });
+    // The package's files travel with the world, as an import in the app would carry them.
+    const files: Record<string, Uint8Array> = {};
+    for (const p of folder.paths) files[p] = await folder.read(p);
+    assets.push({ kind: 'robot', id: rover.id, name: `Rover ${info.format.toUpperCase()}`, format: info.format, source: { name: rover.folder.split('/').pop()!, path: dir, size: 0 }, modelName: info.modelName, entry: info.entry, rootBody: info.rootBody, usd: info.usd, files });
   }
   return assets;
 }
@@ -208,10 +259,10 @@ async function yards(): Promise<{ worlds: World[]; resolved: Resolved }> {
   const worlds: World[] = [];
   for (const kind of ['plane', 'heightmap'] as const) {
     const world = emptyWorld(kind === 'plane' ? 'Smoke Flat' : 'Smoke Hills');
-    if (kind === 'heightmap') world.terrain = { kind, size: [24, 24], friction: 1, rows: 33, cols: 33, height: 1.5, heights: rollingField(33, 33) };
+    if (kind === 'heightmap') world.terrain = { kind, size: [24, 24], friction: 1, rows: 65, cols: 65, heights: rollingField(65, 65, 1.5) };
     const ground = (x: number, y: number) => heightAt(world.terrain, x, y);
     const at = (x: number, y: number, lift: number, yaw = 0, roll = 0): Placed['pose'] => ({ xyz: [x, y, ground(x, y) + lift], rpy: [roll, 0, yaw] });
-    world.assets.push({ kind: 'mesh', id: 'crate', name: 'Crate', source: { name: 'Crate.glb', path: join(OUT ?? '/tmp', 'Crate.glb'), size: crate.glb!.byteLength } }, ...robots);
+    world.assets.push({ kind: 'mesh', id: 'crate', name: 'Crate', source: { name: 'Crate.glb', path: null, size: crate.glb!.byteLength }, data: crate.glb! }, ...robots);
     const spot = tellingSpot(world.terrain);
     world.objects.push(
       { id: 'o1', name: 'Fixed crate', asset: 'crate', pose: at(2, 1, 0, 0.5), scale: 1, physics: physics(false, 'mesh') },
@@ -227,9 +278,15 @@ async function yards(): Promise<{ worlds: World[]; resolved: Resolved }> {
     // smaller than this because a small box on a heightfield's triangles rocks on an edge for seconds in MuJoCo.
     const probes = probeSpots(world.terrain, spot);
     probes.forEach(([x, y], i) => world.objects.push({ id: `probe${i + 1}`, name: `Probe ${i + 1}`, asset: 'crate', pose: at(x, y, 0.1), scale: 0.5, physics: physics(true, 'box', 1) }));
+    const taken: [number, number][] = world.objects.map((o) => [o.pose.xyz[0], o.pose.xyz[1]]);
     for (const rover of ROVERS) {
-      if (!robots.some((r) => r.id === rover.id) || !rover.worlds.includes(world.name)) continue;
-      world.objects.push({ id: `p_${rover.id}`, name: robots.find((r) => r.id === rover.id)!.name, asset: rover.id, pose: at(rover.place[0], rover.place[1], 0.05, rover.yaw), scale: 1, physics: physics(true, 'mesh') });
+      const asset = robots.find((r) => r.id === rover.id);
+      if (!asset || asset.kind !== 'robot' || !rover.worlds.includes(world.name)) continue;
+      // On the hills the rover starts on a slope facing uphill, so the drive test can see it climb.
+      const [x, y] = kind === 'plane' ? [rover.place[0], rover.place[1]] : slopeSpot(world.terrain, taken);
+      const yaw = kind === 'plane' ? rover.yaw : uphill(world.terrain, x, y) - forwardOf(asset.format);
+      world.objects.push({ id: `p_${rover.id}`, name: asset.name, asset: rover.id, pose: at(x, y, 0.05, yaw), scale: 1, physics: physics(true, 'mesh') });
+      taken.push([x, y], [x + 1.5 * Math.cos(yaw + forwardOf(asset.format)), y + 1.5 * Math.sin(yaw + forwardOf(asset.format))], [x + 3 * Math.cos(yaw + forwardOf(asset.format)), y + 3 * Math.sin(yaw + forwardOf(asset.format))]);
     }
     world.spawns.push({ id: 's1', name: 'Start', pose: at(0, 0, 0) });
     worlds.push(world);
@@ -245,7 +302,8 @@ function expectations(world: World, bundle: ExportBundle, mainFile: string): obj
   return {
     world: world.name,
     file: mainFile,
-    terrain: { kind: world.terrain.kind, size: world.terrain.size, height: world.terrain.kind === 'heightmap' ? world.terrain.height : 0 },
+    // The heights too (meters), so a script can tell the ground under a robot wherever it drove to.
+    terrain: world.terrain.kind === 'heightmap' ? { kind: 'heightmap', size: world.terrain.size, height: Math.max(...world.terrain.heights), rows: world.terrain.rows, cols: world.terrain.cols, heights: Array.from(world.terrain.heights) } : { kind: 'plane', size: world.terrain.size, height: 0 },
     probes,
     objects: world.objects
       .filter((p) => world.assets.find((a) => a.id === p.asset)?.kind === 'mesh')
@@ -254,22 +312,30 @@ function expectations(world: World, bundle: ExportBundle, mainFile: string): obj
       .filter((p) => world.assets.find((a) => a.id === p.asset)?.kind === 'robot')
       .map((p) => {
         const asset = world.assets.find((a) => a.id === p.asset) as Extract<Asset, { kind: 'robot' }>;
-        return { id: identifier(p.name, 'robot'), name: p.name, format: asset.format, modelName: asset.modelName, rootBody: asset.rootBody, xyz: p.pose.xyz, ground: ground(p.pose.xyz[0], p.pose.xyz[1]), placed: !left(p) };
+        const heading = p.pose.rpy[2] + forwardOf(asset.format);
+        // Driven forward for a few seconds it must cover mustMove along its heading, and on the hills gain height.
+        const drive = { ...DRIVE, heading, topic: '/cmd_vel', via: asset.format === 'ros' ? 'ros' : 'gz', uphill: world.terrain.kind === 'heightmap' };
+        return { id: identifier(p.name, 'robot'), name: p.name, format: asset.format, modelName: asset.modelName, rootBody: asset.rootBody, xyz: p.pose.xyz, ground: ground(p.pose.xyz[0], p.pose.xyz[1]), placed: !left(p), drive };
       }),
     notes: bundle.notes,
     launch: bundle.launch,
   };
 }
 
-function writeBundle(engine: string, bundle: ExportBundle, expected: object): void {
+function writeBundle(engine: string, world: World, bundle: ExportBundle, expected: object): void {
   const dir = join(OUT!, engine, bundle.name);
   rmSync(dir, { recursive: true, force: true });
-  for (const file of bundle.files) {
-    const path = join(dir, file.path);
+  const put = (rel: string, bytes: Uint8Array | string) => {
+    const path = join(dir, rel);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, 'text' in file ? file.text : file.bytes);
+    writeFileSync(path, bytes);
+  };
+  for (const file of bundle.files) put(file.path, 'text' in file ? file.text : file.bytes);
+  // The robot packages go in from the world, as the app's export writes them.
+  for (const copy of bundle.copies) {
+    const asset = world.assets.find((a) => a.id === copy.asset);
+    if (asset?.kind === 'robot') for (const [p, bytes] of Object.entries(asset.files)) put(`${copy.to}/${p}`, bytes);
   }
-  for (const copy of bundle.copies) cpSync(copy.from, join(dir, copy.to), { recursive: true });
   writeFileSync(`${dir}.smoke.json`, JSON.stringify(expected, null, 2));
 }
 
@@ -288,7 +354,7 @@ describe('sample worlds', () => {
       const mujoco = mujocoBundle(world, resolved);
       const isaac = isaacBundle(world, resolved);
       // Each engine takes the props and the robots it can read, and says why it left the others out.
-      expect(gazebo.notes.filter((n) => !/MuJoCo model cannot/.test(n))).toEqual([]);
+      expect(gazebo.notes.filter((n) => !/MuJoCo model cannot/.test(n) && !/also named reference_rover/.test(n))).toEqual([]);
       for (const bundle of [gazebo, mujoco, isaac]) expect(bundle.notes.filter((n) => /^Gazebo may never settle/.test(n))).toEqual([]);
       expect(mujoco.notes.filter((n) => !/not a MuJoCo model/.test(n))).toEqual([]);
       expect(isaac.notes.filter((n) => !/no USD stage/.test(n))).toEqual([]);
@@ -296,13 +362,13 @@ describe('sample worlds', () => {
         expect(gazebo.copies).toHaveLength(1);
         expect(mujoco.copies).toHaveLength(1);
         // Only the ROS package carries a USD stage.
-        expect(isaac.copies).toHaveLength(world.name === 'Smoke Flat' ? 1 : 0);
+        expect(isaac.copies).toHaveLength(1);
       }
       if (!OUT) continue;
       writeFileSync(join(OUT, 'worlds', `${gazebo.name}.plastikworld`), serializeWorld(world));
-      writeBundle('gazebo', gazebo, expectations(world, gazebo, mainFile(gazebo, '.sdf')));
-      writeBundle('mujoco', mujoco, expectations(world, mujoco, mainFile(mujoco, '.xml')));
-      writeBundle('isaac', isaac, expectations(world, isaac, mainFile(isaac, '.usda')));
+      writeBundle('gazebo', world, gazebo, expectations(world, gazebo, mainFile(gazebo, '.sdf')));
+      writeBundle('mujoco', world, mujoco, expectations(world, mujoco, mainFile(mujoco, '.xml')));
+      writeBundle('isaac', world, isaac, expectations(world, isaac, mainFile(isaac, '.usda')));
     }
     if (OUT) console.log(`sample worlds written under ${OUT} (${robots.length} robot${robots.length === 1 ? '' : 's'} from ${ROBOTS})`);
   });

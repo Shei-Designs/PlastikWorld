@@ -1,0 +1,3 @@
+[default]
+description = "Lets the app ask what it is being driven with (a hardware keyboard, the on-screen keypad) and hear when that changes. Lets it pick documents and a folder, make documents in the folder, delete a picked document, fetch the files it was asked to open, open the share sheet, and ask Google Play services for a Drive authorization and give a token back; writing a picked document is done from the Rust side and needs no permission."
+permissions = ["allow-state", "allow-register-listener", "allow-remove-listener", "allow-pick-folder", "allow-pick-documents", "allow-opened-files", "allow-delete-document", "allow-create-document", "allow-mime-for", "allow-share", "allow-authorize", "allow-clear-token"]

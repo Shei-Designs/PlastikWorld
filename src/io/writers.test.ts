@@ -24,8 +24,9 @@ const cube: Resolved['meshes'][string] = {
 
 function yard(robotFormat: 'ros' | 'gazebo' | 'mujoco' = 'gazebo'): { world: World; resolved: Resolved } {
   const world = emptyWorld('Test Yard');
-  world.assets.push({ kind: 'mesh', id: 'crate', name: 'Crate', source: { name: 'Crate.glb', path: '/tmp/Crate.glb', size: 4 } });
-  world.assets.push({ kind: 'robot', id: 'rover', name: 'rover', format: robotFormat, source: { name: 'reference_rover', path: '/tmp/reference_rover', size: 0 }, modelName: 'reference_rover', entry: robotFormat === 'ros' ? 'urdf/reference_rover.urdf' : robotFormat === 'gazebo' ? 'model.sdf' : 'reference_rover.xml', rootBody: 'Body', usd: 'isaac/reference_rover/reference_rover.usda' });
+  world.assets.push({ kind: 'mesh', id: 'crate', name: 'Crate', source: { name: 'Crate.glb', path: '/tmp/Crate.glb', size: 4 }, data: cube.glb! });
+  const entry = robotFormat === 'ros' ? 'urdf/reference_rover.urdf' : robotFormat === 'gazebo' ? 'model.sdf' : 'reference_rover.xml';
+  world.assets.push({ kind: 'robot', id: 'rover', name: 'rover', format: robotFormat, source: { name: 'reference_rover', path: '/tmp/reference_rover', size: 0 }, modelName: 'reference_rover', entry, rootBody: 'Body', usd: 'isaac/reference_rover/reference_rover.usda', files: { [entry]: new Uint8Array([60]) } });
   world.objects.push({ id: 'o1', name: 'Crate 1', asset: 'crate', pose: { xyz: [2, 1, 0], rpy: [0, 0, Math.PI / 2] }, scale: 1, physics: { static: true, mass: 1, friction: 0.7, collision: 'mesh' } });
   world.objects.push({ id: 'o2', name: 'Loose crate', asset: 'crate', pose: { xyz: [3, 1, 0.5], rpy: [0, 0, 0] }, scale: 0.5, physics: { static: false, mass: 2.5, friction: 0.7, collision: 'box' } });
   world.objects.push({ id: 'r1', name: 'Rover', asset: 'rover', pose: { xyz: [0, 0, 0.05], rpy: [0, 0, 1] }, scale: 1, physics: { static: false, mass: 1, friction: 0.8, collision: 'mesh' } });
@@ -53,7 +54,7 @@ describe('Gazebo', () => {
     expect(sdf).toContain('<scale>0.5 0.5 0.5</scale>');
     expect(sdf).toContain('<uri>model://reference_rover</uri>');
     expect(sdf).toContain('<pose>0 0 0.05 0 0 1</pose>');
-    expect(bundle.copies).toEqual([{ from: '/tmp/reference_rover', to: 'models/reference_rover' }]);
+    expect(bundle.copies).toEqual([{ asset: 'rover', to: 'models/reference_rover' }]);
     expect(bundle.files.filter((f) => f.path === 'meshes/Crate.glb')).toHaveLength(1);
     expect(bundle.notes).toEqual([]);
     expect(bundle.launch).toContain('gz sim');
@@ -68,26 +69,31 @@ describe('Gazebo', () => {
     expect(launch).toContain("'-Y', '1'");
     expect(launch).toContain("DeclareLaunchArgument('headless'");
     expect(launch).toContain("'gz_sim.launch.py'");
+    // The package's bridge comes up with the world, so its cmd_vel reaches Gazebo from ROS 2.
+    expect(launch).toContain("package='ros_gz_bridge'");
+    expect(launch).toContain("os.path.join(here, folder, 'config', 'bridge.yaml')");
     expect(text(bundle, 'Test_Yard.sdf')).not.toContain('<include>');
     expect(bundle.launch).toContain('ros2 launch');
   });
 
   it('writes a heightmap image of 2^n + 1 pixels for the terrain', () => {
     const { world, resolved } = yard();
-    world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 5, cols: 5, height: 0.8, heights: new Array(25).fill(0.5) };
+    world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 5, cols: 5, heights: Float32Array.from({ length: 25 }, (_, i) => (i === 0 ? 0.1 : 0.4)) };
     const bundle = gazeboBundle(world, resolved);
     const png = bundle.files.find((f) => f.path === 'materials/textures/heightmap.png');
     expect(png && 'bytes' in png).toBe(true);
     const view = new DataView((png as { bytes: Uint8Array }).bytes.buffer);
     expect(view.getUint32(16)).toBe(5);
-    // Gazebo scales the image by its brightest pixel: all samples at 0.5 go in as white, 0.4 m high.
-    expect(text(bundle, 'Test_Yard.sdf')).toContain('<heightmap><uri>materials/textures/heightmap.png</uri><size>10 10 0.4</size>');
+    // Gazebo scales the image by its brightest pixel: the samples go in from black (the lowest, 0.1 m) to
+    // white (the highest, 0.4 m), the size's z is the 0.3 m between them, and the heightmap is lifted to 0.1 m.
+    expect(text(bundle, 'Test_Yard.sdf')).toContain('<heightmap><uri>materials/textures/heightmap.png</uri><size>10 10 0.3</size><pos>0 0 0</pos>');
+    expect(text(bundle, 'Test_Yard.sdf')).toContain('<model name="ground">\n      <static>true</static>\n      <pose>0 0 0.1 0 0 0</pose>');
     expect(bundle.notes).toEqual([]);
   });
 
   it('warns about a moving mesh on a heightmap', () => {
     const { world, resolved } = yard();
-    world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 3, cols: 3, height: 1, heights: new Array(9).fill(0.5) };
+    world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 3, cols: 3, heights: new Float32Array(9).fill(0.5) };
     world.objects[1].physics = { ...world.objects[1].physics, collision: 'mesh' };
     const bundle = gazeboBundle(world, resolved);
     expect(bundle.notes).toEqual([expect.stringMatching(/Gazebo may never settle Loose crate/)]);
@@ -119,34 +125,34 @@ describe('MuJoCo', () => {
     expect(xml).toContain('<attach model="reference_rover" body="Body" prefix="Rover_"/>');
     expect(text(bundle, 'meshes/Crate.obj')).toMatch(/^# Crate/);
     expect(text(bundle, 'meshes/Crate.obj')).toContain('f 1 2 3');
-    expect(bundle.copies).toEqual([{ from: '/tmp/reference_rover', to: 'robots/reference_rover' }]);
+    expect(bundle.copies).toEqual([{ asset: 'rover', to: 'robots/reference_rover' }]);
   });
 
   it('puts the heights inline as an hfield', () => {
     const { world, resolved } = yard('mujoco');
-    world.terrain = { kind: 'heightmap', size: [6, 4], friction: 1, rows: 2, cols: 2, height: 0.3, heights: [0, 1, 0.5, 0.25] };
+    world.terrain = { kind: 'heightmap', size: [6, 4], friction: 1, rows: 2, cols: 2, heights: new Float32Array([0, 0.3, 0.15, 0.075]) };
     const xml = text(mujocoBundle(world, resolved), 'Test_Yard.xml');
     // The rows go in +Y first, as MuJoCo reads them.
-    expect(xml).toContain('<hfield name="terrain" nrow="2" ncol="2" size="3 2 0.3 0.02" elevation="0.500 0.250  0.000 1.000"/>');
+    expect(xml).toContain('<hfield name="terrain" nrow="2" ncol="2" size="3 2 0.3 0.02" elevation="0.150 0.075  0.000 0.300"/>');
     expect(xml).toContain('<geom name="floor" type="hfield" hfield="terrain" pos="0 0 0"');
   });
 
   it('keeps the heights where the file has them when MuJoCo stretches them to 0..1', () => {
     const { world, resolved } = yard('mujoco');
-    world.terrain = { kind: 'heightmap', size: [6, 4], friction: 1, rows: 2, cols: 2, height: 2, heights: [0.25, 0.25, 0.5, 0.75] };
+    world.terrain = { kind: 'heightmap', size: [6, 4], friction: 1, rows: 2, cols: 2, heights: new Float32Array([0.5, 0.5, 1, 1.5]) };
     const xml = text(mujocoBundle(world, resolved), 'Test_Yard.xml');
-    // The lowest sample sits at 0.25 × 2 m, the span is 0.5 × 2 m.
+    // The lowest sample sits at 0.5 m, the span is 1 m.
     expect(xml).toContain('size="3 2 1 0.02"');
     expect(xml).toContain('pos="0 0 0.5"');
   });
 
   it('leaves out a second model with the same name', () => {
     const { world, resolved } = yard('mujoco');
-    world.assets.push({ kind: 'robot', id: 'twin', name: 'twin', format: 'mujoco', source: { name: 'other_rover', path: '/tmp/other_rover', size: 0 }, modelName: 'reference_rover', entry: 'reference_rover.xml', rootBody: 'Body', usd: null });
+    world.assets.push({ kind: 'robot', id: 'twin', name: 'twin', format: 'mujoco', source: { name: 'other_rover', path: '/tmp/other_rover', size: 0 }, modelName: 'reference_rover', entry: 'reference_rover.xml', rootBody: 'Body', usd: null, files: { 'reference_rover.xml': new Uint8Array([60]) } });
     world.objects.push({ id: 'r2', name: 'Twin', asset: 'twin', pose: { xyz: [1, 1, 0], rpy: [0, 0, 0] }, scale: 1, physics: { static: false, mass: 1, friction: 0.8, collision: 'mesh' } });
     const bundle = mujocoBundle(world, resolved);
     expect(bundle.notes).toEqual([expect.stringMatching(/Twin: another robot model in this world is also named reference_rover/)]);
-    expect(bundle.copies).toEqual([{ from: '/tmp/reference_rover', to: 'robots/reference_rover' }]);
+    expect(bundle.copies).toEqual([{ asset: 'rover', to: 'robots/reference_rover' }]);
   });
 
   it('says when a robot is not a MuJoCo model', () => {
@@ -181,12 +187,12 @@ describe('Isaac Sim', () => {
     expect(usda).toContain('prepend references = @./robots/reference_rover/isaac/reference_rover/reference_rover.usda@');
     expect(usda).toContain('string Physics = "physx"');
     expect(usda).toContain('def DistantLight "Sun"');
-    expect(bundle.copies).toEqual([{ from: '/tmp/reference_rover', to: 'robots/reference_rover' }]);
+    expect(bundle.copies).toEqual([{ asset: 'rover', to: 'robots/reference_rover' }]);
   });
 
   it('writes the terrain as a mesh grid', () => {
     const { world, resolved } = yard();
-    world.terrain = { kind: 'heightmap', size: [2, 2], friction: 1, rows: 2, cols: 2, height: 1, heights: [0, 0, 0, 1] };
+    world.terrain = { kind: 'heightmap', size: [2, 2], friction: 1, rows: 2, cols: 2, heights: new Float32Array([0, 0, 0, 1]) };
     const usda = text(isaacBundle(world, resolved), 'Test_Yard.usda');
     expect(usda).toContain('point3f[] points = [(-1, -1, 0), (1, -1, 0), (-1, 1, 0), (1, 1, 1)]');
   });

@@ -26,6 +26,32 @@ designed and built by [Andrew O'Shei](https://andrewoshei.com).
 > file puts them, in Gazebo, MuJoCo and Isaac Sim alike; `pnpm smoke:isaac`
 > checks the stage with USD and then plays it headless). See [Roadmap](#roadmap).
 
+## Worlds, saved as you work
+
+A world is saved as you work: a second after the last change, and when the
+window is hidden or closed. There is no Save; the dot by the world's name
+shows while a change is still being written, and Ctrl+S writes it at once. A
+world is one file, `.plastikworld`, and it carries everything in it: the
+objects' GLBs, the robot packages, the terrain heights. So a world can be
+copied, shared or synced as one thing, and nothing it refers to can go
+missing.
+
+On desktop, worlds are kept in `PlastikCAD Worlds` in your Documents folder
+unless you pick another in the worlds browser (Ctrl+O), which lists every
+world with its picture, newest first. On Android they live in the app's own
+storage. In a plain browser they are kept by the browser itself. **Open world
+file…** (Ctrl+Shift+O, also dropping a file, or opening one from the Files app
+on Android) brings a copy in as a world of its own, with a fresh id, so a file
+someone sent never passes for one of yours. **Save a copy…** (Ctrl+Shift+S)
+writes the world wherever you like; on Android into `Download/PlastikWorld`,
+to share from there.
+
+On Android the system hands over one file at a time, so a robot package comes
+in as the zip PlastikCAD exports (dropping a zip works everywhere), and an
+export goes out as a zip of the bundle, into `Download/PlastikWorld` and on
+to the share sheet. On a narrow screen the side panels open as drawers from
+the toolbar.
+
 ## How it works
 
 - **Import** a GLB that PlastikCAD exported (meters, colours embedded) and it
@@ -94,13 +120,28 @@ writes two sample worlds (a flat yard and rolling hills, with crates and
 PlastikCAD's reference rover in each package format) under `fixtures/out/`,
 then each smoke test opens them in the real thing and checks that every placed
 object is there, that fixed ones stay put, that dropped ones come to rest on
-the ground at the height the world file gives, and that the robot stands on it:
+the ground at the height the world file gives, and that the robot stands on it.
+Then it drives the robot: a Twist on `cmd_vel` through the package's bridge in
+Gazebo, its wheel motors in MuJoCo, velocity targets on its wheel joints in
+Isaac Sim. The rover must cover the distance along its heading, stay upright
+and on the ground, and climb the hill it starts on:
 
 ```sh
 pnpm smoke:gazebo   # Gazebo Harmonic + ROS 2 Jazzy in Docker (PlastikCAD's image; built if missing)
 pnpm smoke:mujoco   # needs the mujoco package: MUJOCO_PYTHON=~/venv/bin/python, or python3
 pnpm smoke:isaac    # pxr checks, then a headless play in Isaac Sim (ISAACSIM_PYTHON, default ~/isaacsim-env/bin/python)
 ```
+
+```sh
+pnpm tauri android dev           # the Android app on a connected tablet (or an emulator), with hot reload
+pnpm tauri android build --apk   # the Android app; a debug APK with --debug
+```
+
+The Android build wants `ANDROID_HOME`, `NDK_HOME` and `JAVA_HOME` in the
+environment and the four Rust Android targets installed, as for PlastikCAD.
+Release builds are signed with the key named in
+`~/.android/plastikworld-keystore.properties` (never in the repository); without
+it the APK is left unsigned. CI builds a debug APK on every push.
 
 The Isaac play starts Omniverse Kit, which asks for NVIDIA's EULA the first
 time. Accepting it is your call, so the script does not do it for you: run
@@ -156,13 +197,18 @@ docs/brand/           the icon and banner, and the script that draws them
 
 ## Roadmap
 
-Decided with Andrew on 2026-11-01, in order. The line for the whole app:
+Decided with Andrew on 2026-11-01, in order; [docs/plan.md](docs/plan.md)
+splits it into phases, each testable on its own and each checked on Android
+as well as the desktop. The line for the whole app:
 what all three engines can read is a feature; what one engine does alone
 exports with a note in the other two, the way robot package clashes do now.
 
-1. **Drive the robots in the exported worlds** from the smoke tests (cmd_vel
-   in Gazebo, the actuators in MuJoCo, the ROS 2 graph in Isaac), so the
-   exports are proven usable, not just loadable.
+1. **Drive the robots in the exported worlds** from the smoke tests. Done:
+   cmd_vel through the package's bridge in Gazebo, the wheel motors in
+   MuJoCo, wheel velocity targets in Isaac (the packages' stages carry no
+   ROS 2 graph; PlastikCAD's own Isaac export does, and its `smoke:usd`
+   drives that over ROS 2), so the exports are proven usable, not just
+   loadable.
 2. **Terrain tools.** Sculpting in the viewer (raise, lower, smooth, flatten);
    a heightmap from an image (8 or 16-bit greyscale PNG with a size and a
    height scale); real elevation from GeoTIFF or DEM tiles (USGS 3DEP, SRTM,

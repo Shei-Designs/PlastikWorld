@@ -1,5 +1,6 @@
 // Preferences, kept in localStorage. Worlds themselves live in files, not here.
 import { FILE_FORMAT } from '../app';
+import { newId } from '../model/math';
 
 export type Theme = 'dark' | 'light';
 export type Engine = 'gazebo' | 'mujoco' | 'isaac';
@@ -13,8 +14,10 @@ export interface Prefs {
   engine: Engine;
   /** The folder worlds are kept in, when the user picked one (desktop app); null for the default. */
   worldsDir: string | null;
-  /** The world that was open last, to open it again at start-up. */
+  /** The world that was open last (its key in the store), to open it again at start-up. */
   lastWorld: string | null;
+  /** This device, for the revision stamps sync reads; made once and kept. */
+  device: string;
 }
 
 export const SNAP_STEPS = [0, 0.01, 0.05, 0.1, 0.25, 0.5, 1];
@@ -36,6 +39,7 @@ export function loadPrefs(): Prefs {
     engine: saved.engine === 'mujoco' || saved.engine === 'isaac' ? saved.engine : 'gazebo',
     worldsDir: typeof saved.worldsDir === 'string' && saved.worldsDir ? saved.worldsDir : null,
     lastWorld: typeof saved.lastWorld === 'string' && saved.lastWorld ? saved.lastWorld : null,
+    device: typeof saved.device === 'string' && /^[a-z0-9]{8,32}$/.test(saved.device) ? saved.device : newId(),
   };
 }
 

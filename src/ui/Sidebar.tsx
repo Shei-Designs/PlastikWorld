@@ -1,7 +1,6 @@
 // The left panel: the brand row, the file bar with its menu, the world's
 // contents as a tree, and the assets it draws from.
 import { APP_NAME } from '../app';
-import { isDesktop } from '../platform';
 import type { Asset, LightKind, World } from '../model/types';
 import {
   addLight,
@@ -15,7 +14,7 @@ import {
   pickTerrain,
   pickWorld,
   removeAsset,
-  saveAs,
+  saveCopy,
   saveNow,
   select,
   showAbout,
@@ -62,11 +61,11 @@ function FileMenu() {
         return (
           <div className="menu">
             {item('New world', 'Ctrl+N', () => void newWorld())}
-            {item(isDesktop() ? 'Open…' : 'Open file…', 'Ctrl+O', () => void openWorlds())}
-            {isDesktop() && item('Open file…', 'Ctrl+Shift+O', () => void openWorldFile())}
+            {item('Open…', 'Ctrl+O', () => void openWorlds())}
+            {item('Open world file…', 'Ctrl+Shift+O', () => void openWorldFile())}
             <hr />
-            {item('Save', 'Ctrl+S', () => void saveNow())}
-            {item('Save as…', 'Ctrl+Shift+S', () => void saveAs())}
+            {item('Save now', 'Ctrl+S', () => void saveNow())}
+            {item('Save a copy…', 'Ctrl+Shift+S', () => void saveCopy())}
             <hr />
             {item('Import object (GLB)…', 'Ctrl+I', () => void importObjects())}
             {item('Import robot package…', 'Ctrl+Shift+I', () => void importRobot())}

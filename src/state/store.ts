@@ -2,7 +2,7 @@
 // taken on it. Kept outside React so that the viewer, keyboard shortcuts and
 // menus all drive the same functions.
 import { useSyncExternalStore } from 'react';
-import { zipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { APP_NAME, FILE_EXTENSION, isWorldName } from '../app';
 import { gazeboBundle } from '../io/gazebo';
 import { mujocoBundle } from '../io/mjcf';
@@ -10,14 +10,17 @@ import { isaacBundle } from '../io/usda';
 import { encodeText } from '../io/format';
 import type { ExportBundle, Resolved } from '../io/export';
 import { rollingField } from '../io/heightmap';
-import { parseWorld, serializeWorld } from '../model/file';
+import { parseWorld, parseWorldText, serializeWorld, serializeWorldText } from '../model/file';
 import { add, newId, uniqueName } from '../model/math';
-import { DEFAULT_PHYSICS, emptyWorld } from '../model/types';
+import { DEFAULT_PHYSICS, GRID_DEFAULT, assetPresent, emptyWorld } from '../model/types';
 import type { Asset, Light, LightKind, Pick, Placed, SpawnPoint, Terrain, Vec3, World } from '../model/types';
 import * as platform from '../platform';
 import { inspectPackage } from '../robot/package';
-import { forget, keepGlb, keepRobot, resolveMesh, restoreAssets } from './assets';
+import type { PackageFiles } from '../robot/package';
+import { collectFiles, forget, keepGlb, keepRobot, resolveMesh, restoreAssets } from './assets';
 import { loadPrefs, savePrefs } from './persist';
+import { DiskWorlds, MemoryWorlds, fileNameFor, hasWorldStore, openWorldStore, useWorldStore, worldStore } from './worlds';
+import type { WorldInfo } from './worlds';
 import type { Engine, Prefs } from './persist';
 
 export interface Notice {
@@ -37,17 +40,19 @@ export interface EditorState {
   pick: Pick | null;
   /** Ids of the selected objects, lights and spawn points (one id space). */
   selection: string[];
-  /** Where the world file lives, once it has been written (desktop). */
-  path: string | null;
+  /** Where the world lives in the store (its file's path on desktop), once it has been written. */
+  key: string | null;
   /** The world as last saved or opened, to tell whether there are changes still to write. */
   saved: World | null;
   saving: boolean;
   placing: Placing | null;
-  /** Where worlds are kept, once start-up has looked: the folder (null in a browser). */
-  storage: { location: string | null; defaultDir: string | null } | null;
+  /** Where worlds are kept, once start-up has looked: the folder (null in a browser), and whether another can be chosen. */
+  storage: { location: string | null; defaultDir: string | null; fixed: boolean } | null;
   /** The worlds browser is open. */
   browsing: boolean;
-  worlds: platform.WorldEntry[];
+  /** On a narrow screen (a tablet), the side panel drawn over the viewport, if any. */
+  panel: 'sidebar' | 'inspector' | null;
+  worlds: WorldInfo[];
   exporting: boolean;
   about: boolean;
   prefs: Prefs;
@@ -61,12 +66,13 @@ let state: EditorState = {
   world: emptyWorld(),
   pick: { kind: 'world' },
   selection: [],
-  path: null,
+  key: null,
   saved: null,
   saving: false,
   placing: null,
   storage: null,
   browsing: false,
+  panel: null,
   worlds: [],
   exporting: false,
   about: false,
@@ -238,8 +244,8 @@ export async function importObjects(files?: platform.PickedFile[]): Promise<void
         continue;
       }
       const name = file.name.replace(/\.glb$/i, '');
-      const asset: Asset = { kind: 'mesh', id: newId(), name, source: { name: file.name, path: file.path, size: file.bytes.length } };
-      keepGlb(asset, file.bytes);
+      const asset: Asset = { kind: 'mesh', id: newId(), name, source: { name: file.name, path: file.path, size: file.bytes.length }, data: file.bytes };
+      keepGlb(asset);
       edit((w) => ({ ...w, assets: [...w.assets, asset] }));
       addPlaced(asset, [0, 0, 0]);
     }
@@ -248,10 +254,42 @@ export async function importObjects(files?: platform.PickedFile[]): Promise<void
   }
 }
 
-/** Adds a robot package folder (ROS 2, Gazebo model or MuJoCo model) as an asset and places it at the origin. */
-export async function importRobot(): Promise<void> {
+const ZIP_FILTER = [{ name: 'Robot package (zip)', extensions: ['zip'] }];
+
+/**
+ * The files of a zipped package, by path inside it. A zip of one top-level
+ * folder (as PlastikCAD exports a ROS 2 package) is read from inside that
+ * folder, so the paths match a folder picked directly.
+ */
+function unzipPackage(bytes: Uint8Array): PackageFiles {
+  const entries = unzipSync(bytes);
+  const paths = Object.keys(entries).filter((p) => !p.endsWith('/') && !p.startsWith('__MACOSX/'));
+  const tops = new Set(paths.map((p) => p.split('/')[0]));
+  const root = tops.size === 1 && paths.every((p) => p.includes('/')) ? `${[...tops][0]}/` : '';
+  const files: Record<string, Uint8Array> = {};
+  for (const p of paths) files[p.slice(root.length)] = entries[p];
+  return { paths: Object.keys(files), read: async (p) => files[p] };
+}
+
+/**
+ * Adds a robot package (ROS 2, Gazebo model or MuJoCo model) as an asset and
+ * places it at the origin: a folder where one can be picked, the zip
+ * PlastikCAD exports where it cannot (Android) or when one is dropped.
+ */
+export async function importRobot(zip?: platform.PickedFile): Promise<void> {
   try {
-    const folder = await platform.pickFolder();
+    let folder: { name: string; path: string | null; files: PackageFiles } | null;
+    if (zip) folder = { name: zip.name.replace(/\.zip$/i, ''), path: zip.path, files: unzipPackage(zip.bytes) };
+    else if (platform.canPickFolder()) folder = await platform.pickFolder();
+    else {
+      const [picked] = await platform.pickFiles({ filters: ZIP_FILTER });
+      if (!picked) return;
+      if (!/\.zip$/i.test(picked.name)) {
+        tell('error', `${picked.name} is not a zip. Export the robot from PlastikCAD as a ROS 2 package zip and pick that.`);
+        return;
+      }
+      folder = { name: picked.name.replace(/\.zip$/i, ''), path: picked.path, files: unzipPackage(picked.bytes) };
+    }
     if (!folder) return;
     set({ busy: `Reading ${folder.name}…` });
     const info = await inspectPackage(folder.files);
@@ -259,8 +297,10 @@ export async function importRobot(): Promise<void> {
       tell('error', `${folder.name} is not a robot package: no package.xml with a URDF, no model.sdf, and no MuJoCo XML were found in it.`);
       return;
     }
-    const asset: Asset = { kind: 'robot', id: newId(), name: info.modelName, format: info.format, source: { name: folder.name, path: folder.path, size: 0 }, modelName: info.modelName, entry: info.entry, rootBody: info.rootBody, usd: info.usd };
-    const notes = await keepRobot(asset, folder.files);
+    // The package travels with the world: a world is one file, on every platform.
+    const files = await collectFiles(folder.files);
+    const asset: Asset = { kind: 'robot', id: newId(), name: info.modelName, format: info.format, source: { name: folder.name, path: folder.path, size: Object.values(files).reduce((n, f) => n + f.length, 0) }, modelName: info.modelName, entry: info.entry, rootBody: info.rootBody, usd: info.usd, files };
+    const notes = await keepRobot(asset);
     edit((w) => ({ ...w, assets: [...w.assets, asset] }));
     addPlaced(asset, [0, 0, 0]);
     if (notes.length) tell('info', notes.join(' '));
@@ -272,14 +312,16 @@ export async function importRobot(): Promise<void> {
   }
 }
 
-/** Files dropped on the window: worlds open, GLBs come in as objects. */
+/** Files dropped on the window (or opened from the Files app on Android): worlds open, GLBs come in as objects, zips as robot packages. */
 export async function receiveFiles(files: platform.PickedFile[]): Promise<void> {
   const worlds = files.filter((f) => isWorldName(f.name));
   const glbs = files.filter((f) => /\.glb$/i.test(f.name));
-  if (worlds.length) await openWorld(worlds[0]);
+  const zips = files.filter((f) => /\.zip$/i.test(f.name));
+  if (worlds.length) await importWorldFile(worlds[0]);
   if (glbs.length) await importObjects(glbs);
-  const other = files.length - worlds.length - glbs.length;
-  if (other > 0) tell('info', `Only worlds and GLB objects can be dropped here; a robot package is imported from its folder.`);
+  for (const zip of zips) await importRobot(zip);
+  const other = files.length - worlds.length - glbs.length - zips.length;
+  if (other > 0) tell('info', `Only worlds, GLB objects and zipped robot packages can be dropped here.`);
 }
 
 // --- changing things -----------------------------------------------------------
@@ -305,7 +347,7 @@ export function setTerrainKind(kind: Terrain['kind']): void {
   const t = state.world.terrain;
   if (kind === t.kind) return;
   if (kind === 'plane') updateTerrain({ kind: 'plane', size: t.size, friction: t.friction });
-  else updateTerrain({ kind: 'heightmap', size: t.size, friction: t.friction, rows: 65, cols: 65, height: 0.3, heights: rollingField(65, 65) });
+  else updateTerrain({ kind: 'heightmap', size: t.size, friction: t.friction, rows: GRID_DEFAULT, cols: GRID_DEFAULT, heights: rollingField(GRID_DEFAULT, GRID_DEFAULT, 0.5) });
 }
 
 export function updateWorld(patch: Partial<{ name: string; gravity: Vec3 }>): void {
@@ -399,65 +441,150 @@ export function setPrefs(patch: Partial<Prefs>): void {
 export const toggleTheme = (): void => setPrefs({ theme: state.prefs.theme === 'dark' ? 'light' : 'dark' });
 
 // --- files -----------------------------------------------------------------------------
+//
+// A world is saved as you work, as a PlastikCAD project is: a second after the
+// last change, and when the window is hidden or closed. There is no Save;
+// Ctrl+S writes what autosave would a moment later. "Open world file…" brings
+// a file from anywhere in as a world of its own, a copy with a fresh id, so a
+// file someone sent never passes for one of your own. "Save a copy…" writes
+// the world wherever you like; the world itself stays with the app's worlds.
+
+const AUTOSAVE_MS = 1000;
+/** Taking the picture means drawing the scene again, so it is not done on every save. */
+const THUMB_EVERY_MS = 10_000;
+let thumbSource: (() => string | null) | null = null;
+let thumbTakenAt = 0;
+let writing: Promise<boolean> | null = null;
+let lastSaveError: string | null = null;
+
+/** The viewport offers its picture for the worlds browser. */
+export function provideThumbnail(source: (() => string | null) | null): void {
+  thumbSource = source;
+}
 
 const titleOf = (world: World): string => `${world.name}${isDirty() ? ' •' : ''} – ${APP_NAME}`;
 
 function scheduleAutosave(): void {
   clearTimeout(autosaveTimer);
-  if (!state.path) return;
-  autosaveTimer = setTimeout(() => void saveNow(), 1500);
+  autosaveTimer = setTimeout(() => void saveWorld(), AUTOSAVE_MS);
 }
 
-export async function newWorld(): Promise<void> {
-  if (isDirty() && !(await platform.confirm('Start a new world and lose the changes to this one?', { title: 'Unsaved changes', okLabel: 'Start new', cancelLabel: 'Keep editing' }))) return;
-  past = [];
-  future = [];
-  const world = emptyWorld();
-  set({ world, saved: world, path: null, selection: [], pick: { kind: 'world' }, placing: null, prefs: { ...state.prefs, lastWorld: null } });
+/** Whether the world is worth a file yet: it has one already, something was put in it, or it was named. */
+const worthSaving = (): boolean => state.key !== null || state.world.objects.length > 0 || state.world.assets.length > 0 || state.world.terrain.kind !== 'plane' || state.world.name !== 'Untitled';
+
+function thumbFor(world: World, fresh: boolean): string | undefined {
+  if (!thumbSource) return world.thumb;
+  const now = Date.now();
+  if (!fresh && world.thumb && now - thumbTakenAt < THUMB_EVERY_MS) return world.thumb;
+  const shot = thumbSource();
+  if (!shot) return world.thumb;
+  thumbTakenAt = now;
+  return shot;
 }
 
-/** Writes the world where it lives, or asks where. True when written. */
-export async function saveNow(): Promise<boolean> {
+/**
+ * Writes the world to the store now, if anything changed. Resolves true once
+ * it is saved (or there was nothing to save), false when the write failed; the
+ * changes are then still pending and the next edit tries again.
+ */
+export function saveWorld(fresh = false): Promise<boolean> {
   clearTimeout(autosaveTimer);
-  if (!state.path) return saveAs();
-  if (state.saving) return true;
-  set({ saving: true });
+  if (writing) return writing.then(() => saveWorld(fresh));
+  if (!isDirty() || !worthSaving()) return Promise.resolve(true);
+  if (!hasWorldStore()) return Promise.resolve(false);
+  writing = write(fresh).finally(() => {
+    writing = null;
+  });
+  return writing;
+}
+
+async function write(fresh: boolean): Promise<boolean> {
+  // What is being written counts as saved once it is, even if more changed meanwhile.
   const world = state.world;
+  // Every save is a revision following the one before it, so that sync can tell what changed where.
+  const stamp = { revision: newId(), parent: world.revision, device: state.prefs.device, saved: new Date().toISOString(), thumb: thumbFor(world, fresh) };
+  const stamped: World = { ...world, ...stamp };
+  set({ saving: true });
   try {
-    await platform.writePath(state.path, serializeWorld(world));
-    set({ saved: world, saving: false });
+    const key = await worldStore().write(state.key, world.name, serializeWorldText(stamped));
+    const unchanged = state.world === world;
+    // The stamps join the world without counting as a change of it; edits made meanwhile keep it pending.
+    set({ key, world: unchanged ? stamped : { ...state.world, ...stamp }, saved: unchanged ? stamped : state.saved, saving: false, prefs: state.prefs.lastWorld === key ? state.prefs : { ...state.prefs, lastWorld: key } });
+    lastSaveError = null;
     return true;
   } catch (err) {
     set({ saving: false });
-    fail(err);
+    const message = err instanceof Error ? err.message : String(err);
+    // The same failure on every keystroke is reported once.
+    if (message !== lastSaveError) tell('error', `Could not save: ${message}`);
+    lastSaveError = message;
     return false;
   }
 }
 
-export async function saveAs(): Promise<boolean> {
-  try {
-    const world = state.world;
-    const target = await platform.saveAs(`${world.name}.${FILE_EXTENSION}`, WORLD_FILTER, serializeWorld(world), 'application/x-plastikworld');
-    if (!target) return false;
-    set({ saved: world, path: target.path, prefs: { ...state.prefs, lastWorld: target.path } });
-    tell('ok', `Saved ${target.name}.`);
-    return true;
-  } catch (err) {
-    fail(err);
-    return false;
-  }
+/** Ctrl+S: there is nothing to do but write what autosave would have a moment later, and say so. */
+export async function saveNow(): Promise<boolean> {
+  const ok = await saveWorld(true);
+  if (ok) tell('ok', state.key ? 'Saved.' : 'Nothing to save yet.');
+  return ok;
 }
 
-/** Opens a world from a picked or dropped file. */
-export async function openWorld(file: platform.PickedFile): Promise<void> {
-  if (isDirty() && !(await platform.confirm(`Open ${file.name} and lose the changes to this world?`, { title: 'Unsaved changes', okLabel: 'Open', cancelLabel: 'Keep editing' }))) return;
+function adopt(world: World, key: string | null): void {
+  clearTimeout(autosaveTimer);
+  past = [];
+  future = [];
+  thumbTakenAt = 0;
+  set({ world, saved: world, key, saving: false, selection: [], pick: { kind: 'world' }, placing: null, browsing: false, prefs: state.prefs.lastWorld === key ? state.prefs : { ...state.prefs, lastWorld: key } });
+}
+
+/** Leaves the open world: autosave has written it, or the user chose to go on without. */
+async function leaveWorld(): Promise<boolean> {
+  if (!isDirty() || !worthSaving()) return true;
+  if (await saveWorld(true)) return true;
+  return platform.confirm('The latest changes could not be saved. Go on and lose them?', { title: 'Unsaved changes', okLabel: 'Go on', cancelLabel: 'Keep editing' });
+}
+
+export async function newWorld(): Promise<void> {
+  if (!(await leaveWorld())) return;
+  adopt(emptyWorld(), null);
+}
+
+/**
+ * Loads an opened world's assets. A version 1 world kept them by path; on
+ * desktop they are read back and put into the world, which the next save
+ * then carries.
+ */
+async function settleAssets(): Promise<void> {
+  const absent = state.world.assets.filter((a) => !assetPresent(a) && a.source.path);
+  if (absent.length && platform.isDesktop()) {
+    set({ busy: 'Reading assets…' });
+    const filled = new Map<string, Asset>();
+    for (const asset of absent) {
+      try {
+        if (asset.kind === 'mesh') filled.set(asset.id, { ...asset, data: (await platform.readPath(asset.source.path!)).bytes });
+        else filled.set(asset.id, { ...asset, files: await collectFiles((await platform.folderAt(asset.source.path!)).files) });
+      } catch (err) {
+        console.warn(`Could not read ${asset.name} back:`, err);
+      }
+    }
+    if (filled.size) set({ world: { ...state.world, assets: state.world.assets.map((a) => filled.get(a.id) ?? a) } });
+  }
+  const notes = await restoreAssets(state.world.assets);
+  if (notes.length) tell('info', notes.join(' '));
+}
+
+/** Opens a world from the store by its key. */
+export async function openWorldKey(key: string): Promise<void> {
+  if (key === state.key) {
+    set({ browsing: false });
+    return;
+  }
+  if (!(await leaveWorld())) return;
+  set({ busy: 'Opening…' });
   try {
-    const world = parseWorld(file.bytes);
-    past = [];
-    future = [];
-    set({ world, saved: world, path: file.path, selection: [], pick: { kind: 'world' }, placing: null, browsing: false, prefs: { ...state.prefs, lastWorld: file.path }, busy: 'Reading assets…' });
-    const notes = await restoreAssets(world.assets);
-    if (notes.length) tell('info', notes.join(' '));
+    const world = parseWorldText(await worldStore().read(key));
+    adopt(world, key);
+    await settleAssets();
   } catch (err) {
     fail(err);
   } finally {
@@ -465,26 +592,57 @@ export async function openWorld(file: platform.PickedFile): Promise<void> {
   }
 }
 
+const folderOf = (path: string): string => path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))).replace(/[\\/]+$/, '');
+
+/** A world file from anywhere (picked, dropped, passed on the command line) comes in as a world of its own: a copy with a fresh id. */
+export async function importWorldFile(file: platform.PickedFile): Promise<void> {
+  set({ busy: `Reading ${file.name}…` });
+  try {
+    const world = parseWorld(file.bytes);
+    const store = worldStore();
+    // A file already in the worlds folder is simply opened.
+    if (file.path && store.location && folderOf(file.path) === store.location.replace(/[\\/]+$/, '')) return await openWorldKey(file.path);
+    if (!(await leaveWorld())) return;
+    world.id = newId();
+    delete world.revision;
+    delete world.parent;
+    const key = await store.write(null, world.name, serializeWorldText(world));
+    adopt(world, key);
+    await settleAssets();
+    tell('info', `"${world.name}" is now a world of its own in ${APP_NAME}. Changes are saved with the app's worlds, not in ${file.name}.`);
+  } catch (err) {
+    fail(err);
+  } finally {
+    set({ busy: null });
+  }
+}
+
+/** "Open world file…": brings a world file from anywhere in as a world of its own. */
 export async function openWorldFile(): Promise<void> {
   try {
     const [file] = await platform.pickFiles({ filters: WORLD_FILTER });
-    if (file) await openWorld(file);
+    if (file) await importWorldFile(file);
   } catch (err) {
     fail(err);
   }
 }
 
-export async function openWorldPath(path: string): Promise<void> {
+/** "Save a copy…": writes the world to a place of the user's choosing, to share or keep. The world itself stays where it is. */
+export async function saveCopy(): Promise<boolean> {
   try {
-    await openWorld(await platform.readPath(path));
+    await saveWorld(true);
+    const target = await platform.saveAs(fileNameFor(state.world.name), WORLD_FILTER, serializeWorld(state.world), 'application/x-plastikworld');
+    if (!target) return false;
+    tell('ok', `Saved a copy as ${target.name}.`);
+    return true;
   } catch (err) {
     fail(err);
+    return false;
   }
 }
 
-/** The worlds browser: lists the worlds folder (desktop); in a browser, just the file picker. */
+/** The worlds browser: the worlds in the store, newest first. */
 export async function openWorlds(): Promise<void> {
-  if (!platform.isDesktop()) return openWorldFile();
   set({ browsing: true });
   await refreshWorlds();
 }
@@ -492,51 +650,73 @@ export async function openWorlds(): Promise<void> {
 export const closeWorlds = (): void => set({ browsing: false });
 
 export async function refreshWorlds(): Promise<void> {
-  const location = state.storage?.location;
-  if (!location) return;
+  if (!hasWorldStore()) return;
   try {
-    set({ worlds: await platform.listWorlds(location) });
+    const items = await worldStore().list();
+    set({ worlds: items.sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name)) });
   } catch (err) {
     fail(err);
   }
 }
 
+/** Desktop: keeps the worlds in another folder from now on. The open world stays open where it is. */
 export async function chooseWorldsFolder(): Promise<void> {
-  const picked = await platform.pickWorldsFolder(state.storage?.location ?? undefined);
+  if (!state.storage || state.storage.fixed) return;
+  const picked = await platform.pickWorldsFolder(state.storage.location ?? undefined);
   if (!picked) return;
-  set({ storage: { ...state.storage!, location: picked }, prefs: { ...state.prefs, worldsDir: picked } });
+  useWorldStore(new DiskWorlds(picked));
+  set({ storage: { ...state.storage, location: picked }, prefs: { ...state.prefs, worldsDir: picked } });
   await refreshWorlds();
 }
 
-export async function deleteWorldFile(entry: platform.WorldEntry): Promise<void> {
-  if (!(await platform.confirm(`Delete ${entry.name}? This cannot be undone.`, { title: 'Delete world', okLabel: 'Delete', cancelLabel: 'Keep' }))) return;
+export async function deleteWorld(info: WorldInfo): Promise<void> {
+  if (!(await platform.confirm(`Delete "${info.name}"? This cannot be undone.`, { title: 'Delete world', okLabel: 'Delete', cancelLabel: 'Keep' }))) return;
   try {
-    await platform.removeFile(entry.path);
-    if (state.path === entry.path) set({ path: null, prefs: { ...state.prefs, lastWorld: null } });
+    if (info.key === state.key) {
+      // Nothing pending may write it back after it is gone.
+      clearTimeout(autosaveTimer);
+      await writing;
+    }
+    await worldStore().remove(info.key);
+    if (info.key === state.key) adopt(emptyWorld(), null);
     await refreshWorlds();
   } catch (err) {
     fail(err);
   }
 }
 
-/** Start-up: finds the worlds folder, then opens the file the app was started with, or the last one. */
+/** Start-up: picks the store, then opens the file the app was started with, or the last world. */
 export async function restoreSession(): Promise<void> {
-  if (!platform.isDesktop()) {
-    set({ storage: { location: null, defaultDir: null } });
+  try {
+    const home = await openWorldStore(state.prefs.worldsDir);
+    set({ storage: { location: worldStore().location, defaultDir: home.defaultDir, fixed: home.fixed } });
+  } catch (err) {
+    fail(err);
+    useWorldStore(new MemoryWorlds());
+    set({ storage: { location: null, defaultDir: null, fixed: true } });
+  }
+  const [startup] = await platform.startupFiles();
+  if (startup) {
+    try {
+      await importWorldFile(await platform.readPath(startup));
+    } catch (err) {
+      fail(err);
+    }
     return;
   }
+  const last = state.prefs.lastWorld;
+  if (!last) return;
   try {
-    const home = await platform.defaultWorldsDir();
-    set({ storage: { location: state.prefs.worldsDir ?? home.path, defaultDir: home.path } });
+    if ((await worldStore().list()).some((w) => w.key === last)) await openWorldKey(last);
+    else set({ prefs: { ...state.prefs, lastWorld: null } });
   } catch (err) {
     fail(err);
   }
-  const [startup] = await platform.startupFiles();
-  const path = startup ?? state.prefs.lastWorld;
-  if (path) await openWorldPath(path);
 }
 
 export const showAbout = (open: boolean): void => set({ about: open });
+/** Opens a side panel as a drawer on a narrow screen, or closes the one open. */
+export const showPanel = (panel: 'sidebar' | 'inspector' | null): void => set({ panel: state.panel === panel ? null : panel });
 export const showExport = (open: boolean): void => set({ exporting: open, placing: null });
 
 // --- export ------------------------------------------------------------------------------
@@ -554,7 +734,18 @@ export async function buildBundle(engine: Engine): Promise<ExportBundle> {
   return WRITERS[engine](state.world, resolved);
 }
 
-/** Writes the bundle: into a chosen folder on desktop (robot packages copied in), as a zip download in a browser. */
+/** The robot packages' files, each under its folder in the bundle, from the assets the world carries. */
+function packageEntries(bundle: ExportBundle): [string, Uint8Array][] {
+  const out: [string, Uint8Array][] = [];
+  for (const copy of bundle.copies) {
+    const asset = state.world.assets.find((a) => a.id === copy.asset);
+    if (asset?.kind !== 'robot') continue;
+    for (const [path, bytes] of Object.entries(asset.files)) out.push([`${copy.to}/${path}`, bytes]);
+  }
+  return out;
+}
+
+/** Writes the bundle: into a chosen folder on desktop, as a zip download in a browser; the robot packages go in from the world. */
 export async function exportWorld(engine: Engine): Promise<void> {
   set({ busy: 'Writing the world…' });
   try {
@@ -564,17 +755,26 @@ export async function exportWorld(engine: Engine): Promise<void> {
       if (!into) return;
       const folder = `${into}/${bundle.name}`;
       for (const file of bundle.files) await platform.writePath(`${folder}/${file.path}`, 'text' in file ? encodeText(file.text) : file.bytes);
-      for (const copy of bundle.copies) await platform.copyTree(copy.from, `${folder}/${copy.to}`);
+      for (const [path, bytes] of packageEntries(bundle)) await platform.writePath(`${folder}/${path}`, bytes);
       set({ exporting: false });
       tell(bundle.notes.length ? 'info' : 'ok', `${bundle.notes.length ? bundle.notes.join(' ') + ' ' : ''}Written to ${folder}. Run: ${bundle.launch}`, { label: 'Show folder', run: () => void platform.openPath(folder).catch(fail) });
     } else {
+      // No folder to write into (a browser, Android): the bundle goes out as a zip.
       const entries: Record<string, Uint8Array> = {};
       for (const file of bundle.files) entries[`${bundle.name}/${file.path}`] = 'text' in file ? encodeText(file.text) : file.bytes;
+      for (const [path, bytes] of packageEntries(bundle)) entries[`${bundle.name}/${path}`] = bytes;
       const zip = zipSync(entries, { level: 6 });
-      await platform.writeTarget({ path: null, name: `${bundle.name}-${engine}.zip` }, zip, 'application/zip');
-      set({ exporting: false });
-      const copies = bundle.copies.length ? ` The robot packages (${bundle.copies.map((c) => c.to).join(', ')}) must be copied in by hand: a browser cannot read folders.` : '';
-      tell(bundle.notes.length ? 'info' : 'ok', `${bundle.notes.join(' ')}${copies} Run: ${bundle.launch}`);
+      const name = `${bundle.name}-${engine}.zip`;
+      if (platform.keepsExports()) {
+        // Android: into the app's folder in Downloads, and offered to other apps from there.
+        const exported = await platform.exportToAppFolder('', name, zip, 'application/zip');
+        set({ exporting: false });
+        tell(bundle.notes.length ? 'info' : 'ok', `${bundle.notes.join(' ')} Written to ${exported.path}. Run: ${bundle.launch}`, { label: 'Share…', run: () => void platform.share([exported.uri], 'application/zip').catch(fail) });
+      } else {
+        await platform.writeTarget({ path: null, name }, zip, 'application/zip');
+        set({ exporting: false });
+        tell(bundle.notes.length ? 'info' : 'ok', `${bundle.notes.join(' ')} Run: ${bundle.launch}`);
+      }
     }
   } catch (err) {
     fail(err);

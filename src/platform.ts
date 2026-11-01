@@ -1,9 +1,12 @@
 // The one module that knows whether the UI runs in the desktop app (Tauri) or
 // in a plain browser, as it does during development (`pnpm dev`). Tauri's
 // window, webview and dialog modules are imported on demand, so the browser
-// never loads them. Lifted from PlastikCAD's `src/platform.ts`, without the
-// Android branches: an Android build comes later, through the same seams.
-import { invoke, isTauri } from '@tauri-apps/api/core';
+// never loads them. Lifted from PlastikCAD's `src/platform.ts`, Android
+// branches included: there the pickers hand out content URIs through the
+// device plugin, exports go to the app's folder in Downloads and the share
+// sheet, and a folder cannot be picked at all (a robot package comes in as the
+// zip PlastikCAD exports).
+import { addPluginListener, invoke, isTauri } from '@tauri-apps/api/core';
 import { APP_NAME } from './app';
 import type { PackageFiles } from './robot/package';
 
@@ -22,6 +25,14 @@ export interface PickedFile {
 export function isDesktop(): boolean {
   return isTauri();
 }
+
+/** The Android app: the Tauri shell in an Android webview. */
+export function isAndroid(): boolean {
+  return isTauri() && typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+}
+
+/** Whether a folder can be picked here: desktop and browsers can, Android cannot (its pickers hand out one document at a time). */
+export const canPickFolder = (): boolean => !isAndroid();
 
 const baseName = (path: string): string => path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
 
@@ -89,18 +100,71 @@ function pickInBrowser(filters: FileFilter[], multiple: boolean, directory = fal
 export async function pickFiles(options: { filters: FileFilter[]; multiple?: boolean }): Promise<PickedFile[]> {
   const multiple = options.multiple ?? false;
   if (!isTauri()) return Promise.all((await pickInBrowser(options.filters, multiple)).map(readBrowserFile));
+  if (isAndroid()) {
+    // The device plugin's picker: every file is offered, as the system picker filters by the type a file was
+    // stored with, which a GLB or a world file rarely has (they show greyed out), and the app reads what each
+    // one is itself.
+    const { uris } = await invoke<{ uris: string[] }>('plugin:device|pick_documents', { multiple });
+    return Promise.all(uris.map(readPath));
+  }
   const { open } = await import('@tauri-apps/plugin-dialog');
   const picked: string | string[] | null = await open({ filters: options.filters, multiple });
   if (picked === null) return [];
   return Promise.all((Array.isArray(picked) ? picked : [picked]).map(readPath));
 }
 
-/** Desktop only. Rejects with a readable Error if the file cannot be read. */
+/** Desktop and Android (a path, or a content URI). Rejects with a readable Error if the file cannot be read. */
 export async function readPath(path: string): Promise<PickedFile> {
   // Tauri delivers the bytes as an array of numbers where it cannot use a binary response.
   const data = await command<ArrayBuffer | number[]>('read_file', { path });
   const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
-  return { name: baseName(path), path, bytes };
+  return { name: await nameOf(path), path, bytes };
+}
+
+/**
+ * The file's name with its extension. A path ends in it; a `content://` URI
+ * from an Android picker may carry it in its last segment ("primary:Download/box.glb")
+ * or not at all, in which case the app asks the provider.
+ */
+async function nameOf(path: string): Promise<string> {
+  if (!path.includes('://')) return baseName(path);
+  let segment = baseName(path);
+  try {
+    segment = baseName(decodeURIComponent(segment));
+  } catch {
+    // Left as it came.
+  }
+  if (/\.[^.]+$/.test(segment)) return segment;
+  const asked = await command<string | null>('file_name', { path }).catch(() => null);
+  return asked ?? segment;
+}
+
+/**
+ * Android: writes an export into the app's own folder in Downloads
+ * (`Download/PlastikWorld/<folder>/<name>`), replacing a file of that name, with
+ * no dialog. Resolves with the file's content URI and the path as the Files
+ * app shows it.
+ */
+export async function exportToAppFolder(folder: string, name: string, bytes: Uint8Array, mime: string): Promise<{ uri: string; path: string }> {
+  return command<{ uri: string; path: string }>('save_export', bytes, {
+    folder: encodeURIComponent(folder),
+    name: encodeURIComponent(name),
+    mime: encodeURIComponent(mime),
+  });
+}
+
+/** Whether exports are named in the app and kept in its own folder (Android), rather than placed through a save dialog. */
+export const keepsExports = (): boolean => isAndroid();
+
+/** Android: opens the share sheet with the given files. */
+export async function share(uris: string[], mime: string): Promise<void> {
+  await invoke('plugin:device|share', { uris, mime });
+}
+
+/** Android: opens the share sheet with a file made for the occasion (a zip of an export bundle), staged in the app's cache. */
+export async function shareBytes(name: string, bytes: Uint8Array, mime: string): Promise<void> {
+  const path = await command<string>('stage_share', bytes, { name: encodeURIComponent(name) });
+  await share([path], mime);
 }
 
 /** A folder picked as a robot package: its name, its path (null in the browser) and its files. */
@@ -116,6 +180,7 @@ export interface PickedFolder {
  * Null if canceled.
  */
 export async function pickFolder(): Promise<PickedFolder | null> {
+  if (isAndroid()) throw new Error('Android hands out one file at a time: import the robot package as the zip PlastikCAD exports.');
   if (!isTauri()) {
     const files = await pickInBrowser([], true, true);
     if (files.length === 0) return null;
@@ -184,6 +249,11 @@ export async function writeTarget(target: SaveTarget, bytes: Uint8Array, mime: s
 
 /** Native save dialog then write (desktop), or a download (browser, where `path` is null). Null if canceled. */
 export async function saveAs(suggestedName: string, filters: FileFilter[], bytes: Uint8Array, mime: string): Promise<SaveTarget | null> {
+  if (isAndroid()) {
+    // Into the app's folder in Downloads, with no dialog; shared from there.
+    const exported = await exportToAppFolder('', suggestedName, bytes, mime);
+    return { path: exported.path, name: suggestedName };
+  }
   const target = await chooseSave(suggestedName, filters);
   if (!target) return null;
   await writeTarget(target, bytes, mime);
@@ -241,7 +311,18 @@ export async function removeFile(path: string): Promise<void> {
   await command<void>('remove_file', { path });
 }
 
-/** Desktop only: where worlds go unless the user picked a folder. */
+/** Desktop only: the first `limit` bytes of a file, enough for a world's header. */
+export async function readHead(path: string, limit: number): Promise<Uint8Array> {
+  const data = await command<ArrayBuffer | number[]>('read_head', { path, limit });
+  return data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
+}
+
+/** Desktop only: renames a world's file when its world was renamed. Never over an existing file. */
+export async function moveFile(from: string, to: string): Promise<void> {
+  await command<void>('move_file', { from, to });
+}
+
+/** Desktop only: where worlds go unless the user picked a folder; `fixed` where no other folder can be chosen (Android). */
 export async function defaultWorldsDir(): Promise<{ path: string; fixed: boolean }> {
   return command<{ path: string; fixed: boolean }>('default_worlds_dir');
 }
@@ -256,8 +337,32 @@ export async function pickWorldsFolder(defaultPath?: string): Promise<string | n
 /** The world the app was started with: the file passed on the command line on desktop. None in the browser. */
 export async function startupFiles(): Promise<string[]> {
   if (!isTauri()) return [];
+  if (isAndroid()) return (await invoke<{ uris: string[] }>('plugin:device|opened_files').catch(() => ({ uris: [] }))).uris;
   const path = await command<string | null>('startup_file');
   return path ? [path] : [];
+}
+
+/**
+ * Android: files handed to the running app (a tap in the Files app while it is
+ * open). Fetched when the plugin says some arrived. Returns an unsubscribe function.
+ */
+export function onFilesOpened(handler: (paths: string[]) => void): () => void {
+  if (!isAndroid()) return () => {};
+  let stopped = false;
+  let stop: (() => void) | null = null;
+  addPluginListener('device', 'opened', async () => {
+    const { uris } = await invoke<{ uris: string[] }>('plugin:device|opened_files');
+    if (uris.length > 0) handler(uris);
+  })
+    .then((listener) => {
+      stop = () => void listener.unregister();
+      if (stopped) stop();
+    })
+    .catch(console.error);
+  return () => {
+    stopped = true;
+    stop?.();
+  };
 }
 
 export function setWindowTitle(title: string): void {

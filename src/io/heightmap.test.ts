@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { flatHeights, gazeboSize, heightAt, resample, rollingField } from './heightmap';
+import { flatHeights, gazeboSize, heightAt, range, resample, rollingField, snapped } from './heightmap';
 import { encodeGreyPng } from './png';
 import type { Terrain } from '../model/types';
 
-const ramp: Terrain = { kind: 'heightmap', size: [4, 2], friction: 1, rows: 2, cols: 3, height: 2, heights: [0, 0.5, 1, 0, 0.5, 1] };
+const ramp: Terrain = { kind: 'heightmap', size: [4, 2], friction: 1, rows: 2, cols: 3, heights: new Float32Array([0, 1, 2, 0, 1, 2]) };
 
 describe('heightmaps', () => {
   it('samples heights bilinearly in meters', () => {
@@ -19,9 +19,19 @@ describe('heightmaps', () => {
     const out = resample(ramp, 5);
     expect(out).toHaveLength(25);
     expect(out[0]).toBeCloseTo(0);
-    expect(out[4]).toBeCloseTo(1);
-    expect(out[2]).toBeCloseTo(0.5);
-    expect(out[24]).toBeCloseTo(1);
+    expect(out[4]).toBeCloseTo(2);
+    expect(out[2]).toBeCloseTo(1);
+    expect(out[24]).toBeCloseTo(2);
+  });
+
+  it('snaps an odd grid onto the nearest allowed size and leaves an allowed one alone', () => {
+    const odd = snapped(ramp);
+    expect([odd.rows, odd.cols]).toEqual([65, 65]);
+    expect(odd.heights[64]).toBeCloseTo(2);
+    expect(heightAt(odd, 0, 0)).toBeCloseTo(1, 3);
+    const even: Extract<Terrain, { kind: 'heightmap' }> = { kind: 'heightmap', size: [1, 1], friction: 1, rows: 65, cols: 65, heights: new Float32Array(65 * 65) };
+    expect(snapped(even)).toBe(even);
+    expect(range(new Float32Array([2, -1, 0.5]))).toEqual([-1, 2]);
   });
 
   it('picks the 2^n + 1 size Gazebo wants', () => {
@@ -31,12 +41,12 @@ describe('heightmaps', () => {
     expect(gazeboSize(200)).toBe(257);
   });
 
-  it('makes a field that is flat in the middle and within 0..1', () => {
-    const field = rollingField(33, 33);
+  it('makes a field that is flat in the middle and within its amplitude', () => {
+    const field = rollingField(33, 33, 2);
     expect(field).toHaveLength(33 * 33);
-    expect(field.every((v) => v >= 0 && v <= 1)).toBe(true);
-    expect(field[16 * 33 + 16]).toBeCloseTo(0.5);
-    expect(flatHeights(2, 2)).toEqual([0, 0, 0, 0]);
+    expect(field.every((v) => v >= 0 && v <= 2)).toBe(true);
+    expect(field[16 * 33 + 16]).toBeCloseTo(1);
+    expect(Array.from(flatHeights(2, 2))).toEqual([0, 0, 0, 0]);
   });
 
   it('writes a 16-bit greyscale PNG', () => {

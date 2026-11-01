@@ -42,9 +42,9 @@ export interface Resolved {
 
 export type ExportFile = { path: string; text: string } | { path: string; bytes: Uint8Array };
 
-/** A folder to be copied whole into the bundle (a robot package). */
+/** A robot package's files, written whole into a folder of the bundle; the world carries them under the asset. */
 export interface ExportCopy {
-  from: string;
+  asset: string;
   to: string;
 }
 
@@ -65,13 +65,13 @@ export interface ExportBundle {
  * since the `model://` and `package://` URIs inside it are the folder's name,
  * so the caller leaves that one out with a note.
  */
-export function claimFolder(copies: ExportCopy[], from: string, to: string): 'new' | 'shared' | 'taken' {
+export function claimFolder(copies: ExportCopy[], asset: string, to: string): 'new' | 'shared' | 'taken' {
   const existing = copies.find((c) => c.to === to);
   if (!existing) {
-    copies.push({ from, to });
+    copies.push({ asset, to });
     return 'new';
   }
-  return existing.from === from ? 'shared' : 'taken';
+  return existing.asset === asset ? 'shared' : 'taken';
 }
 
 export const vec = (v: Vec3, decimals = 6): string => v.map((x) => fmt(x, decimals)).join(' ');
