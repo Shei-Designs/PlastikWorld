@@ -12,6 +12,8 @@ import type { ExportBundle, Resolved } from '../io/export';
 import { rollingField } from '../io/heightmap';
 import { DEFAULT_BRUSH, dab, generateField } from '../terrain/brush';
 import type { Brush, FieldSpec, Window as BrushWindow } from '../terrain/brush';
+import { heightsFromImage, readImage } from '../terrain/image';
+import type { GreyImage, ImageFit } from '../terrain/image';
 import { parseWorld, parseWorldText, serializeWorld, serializeWorldText } from '../model/file';
 import { add, newId, uniqueName } from '../model/math';
 import { DEFAULT_PHYSICS, GRID_DEFAULT, assetPresent, emptyWorld } from '../model/types';
@@ -53,6 +55,8 @@ export interface EditorState {
   placing: Placing | null;
   /** The tool the pointer drives on the ground, if any; the selection and placing give way to it. */
   tool: Tool | null;
+  /** An image read as a heightmap, waiting for its size and height range in the import dialog. */
+  heightmapImport: { name: string; image: GreyImage } | null;
   /** Where worlds are kept, once start-up has looked: the folder (null in a browser), and whether another can be chosen. */
   storage: { location: string | null; defaultDir: string | null; fixed: boolean } | null;
   /** The worlds browser is open. */
@@ -78,6 +82,7 @@ let state: EditorState = {
   saving: false,
   placing: null,
   tool: null,
+  heightmapImport: null,
   storage: null,
   browsing: false,
   panel: null,
@@ -325,11 +330,13 @@ export async function receiveFiles(files: platform.PickedFile[]): Promise<void> 
   const worlds = files.filter((f) => isWorldName(f.name));
   const glbs = files.filter((f) => /\.glb$/i.test(f.name));
   const zips = files.filter((f) => /\.zip$/i.test(f.name));
+  const images = files.filter((f) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(f.name));
   if (worlds.length) await importWorldFile(worlds[0]);
   if (glbs.length) await importObjects(glbs);
   for (const zip of zips) await importRobot(zip);
-  const other = files.length - worlds.length - glbs.length - zips.length;
-  if (other > 0) tell('info', `Only worlds, GLB objects and zipped robot packages can be dropped here.`);
+  if (images.length) await importHeightmap(images[0]);
+  const other = files.length - worlds.length - glbs.length - zips.length - images.length;
+  if (other > 0) tell('info', `Only worlds, GLB objects, zipped robot packages and heightmap images can be dropped here.`);
 }
 
 // --- changing things -----------------------------------------------------------
@@ -397,6 +404,37 @@ export function endSculpt(canceled: boolean): void {
   if (past.length > 200) past.shift();
   future = [];
   set({});
+}
+
+const IMAGE_FILTER = [{ name: 'Heightmap image', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }];
+
+/** "Import heightmap image…": reads the image, then asks what it covers and how high it goes. */
+export async function importHeightmap(file?: platform.PickedFile): Promise<void> {
+  try {
+    const picked = file ?? (await platform.pickFiles({ filters: IMAGE_FILTER }))[0];
+    if (!picked) return;
+    set({ busy: `Reading ${picked.name}…` });
+    const image = await readImage(picked.name, picked.bytes);
+    set({ heightmapImport: { name: picked.name, image }, tool: null, placing: null, pick: { kind: 'terrain' }, selection: [] });
+  } catch (err) {
+    fail(err);
+  } finally {
+    set({ busy: null });
+  }
+}
+
+export const closeHeightmap = (): void => set({ heightmapImport: null });
+
+/** Puts the read image on the terrain, one step of the history: the grid, the area it covers and the heights of black and white. */
+export function applyHeightmap(fit: ImageFit, size: [number, number]): void {
+  const pending = state.heightmapImport;
+  if (!pending) return;
+  const t = state.world.terrain;
+  const heights = heightsFromImage(pending.image, fit);
+  updateTerrain({ kind: 'heightmap', size, friction: t.friction, rows: fit.samples, cols: fit.samples, heights });
+  set({ heightmapImport: null });
+  const { width, height } = pending.image;
+  if (width !== height) tell('info', `${pending.name} is ${width} × ${height}; it was stretched onto the square grid, so the terrain's width and depth say what it covers.`);
 }
 
 /** Replaces the heights with a generated field, one step of the history. */

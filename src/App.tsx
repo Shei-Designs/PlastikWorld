@@ -32,6 +32,7 @@ import {
 } from './state/store';
 import { About } from './ui/About';
 import { ExportDialog } from './ui/ExportDialog';
+import { HeightmapDialog } from './ui/HeightmapDialog';
 import { Inspector } from './ui/Inspector';
 import { Sidebar } from './ui/Sidebar';
 import { Viewport, viewerRef } from './ui/Viewport';
@@ -186,6 +187,7 @@ export default function App() {
       <Toast />
       <About open={about} onClose={() => showAbout(false)} />
       <ExportDialog />
+      <HeightmapDialog />
       <WorldsDialog />
     </div>
   );

@@ -4,7 +4,7 @@ import { BRUSH_KINDS, DEFAULT_BRUSH, DEFAULT_FIELD, FIELD_KINDS } from '../terra
 import type { FieldSpec } from '../terrain/brush';
 import { GRID_MAX, GRID_SIZES, assetOf } from '../model/types';
 import type { Light, LightKind, Placed, SpawnPoint, Terrain, World } from '../model/types';
-import { deleteSelected, duplicateSelected, generateTerrain, setBrush, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { deleteSelected, duplicateSelected, generateTerrain, importHeightmap, setBrush, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
 import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
@@ -226,8 +226,12 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
               New seed
             </button>
           </div>
+          <h2>Import</h2>
+          <button type="button" className="chip" onClick={() => void importHeightmap()}>
+            Heightmap image…
+          </button>
           <p className="note">
-            The grid is 2^n + 1 samples a side so that Gazebo, MuJoCo and Isaac Sim all get the very same heights; past {GRID_MAX} the Isaac stage's ground mesh gets heavy. Importing a heightmap image is next on the roadmap.
+            A greyscale PNG (8 or 16-bit; a colour image is read by its brightness), black the lowest point and white the highest. The grid is 2^n + 1 samples a side so that Gazebo, MuJoCo and Isaac Sim all get the very same heights; past {GRID_MAX} the Isaac stage's ground mesh gets heavy.
           </p>
         </>
       )}

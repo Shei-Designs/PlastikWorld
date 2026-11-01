@@ -95,8 +95,13 @@ a brush: raise, lower, smooth, flatten to the height where the stroke began,
 or set a height. Drag on the ground with the left button or one finger; the
 right button, the middle button or a second finger still move the camera;
 `[` and `]` change the brush size; Esc puts the brush down. Each stroke is
-one undo step. Terrain is made here and never imported as a mesh: a bridge
-spans a valley as an object, a tunnel is an object in the ground.
+one undo step. **Import a heightmap image** (a greyscale PNG, 8 or 16-bit;
+a colour image is read by its brightness; dropping an image on the window
+works too) and say what it covers and how high black and white are; the top
+of the image is +Y, as Gazebo reads it, so the image a Gazebo export carries
+comes back the same way up. Terrain is made here and never imported as a
+mesh: a bridge spans a valley as an object, a tunnel is an object in the
+ground.
 
 ### Controls
 
@@ -227,7 +232,7 @@ exports with a note in the other two, the way robot package clashes do now.
 2. **Terrain tools.** Sculpting in the viewer (raise, lower, smooth, flatten
    and set, done) and seeded fields (rolling, hills, ridges, craters, done);
    a heightmap from an image (8 or 16-bit greyscale PNG with a size and a
-   height scale); real elevation from GeoTIFF or DEM tiles (USGS 3DEP, SRTM,
+   height scale, done); real elevation from GeoTIFF or DEM tiles (USGS 3DEP, SRTM,
    Copernicus), a box picked and resampled onto the grid. Terrain is made
    here, never imported as a mesh: a bridge spans a valley as an object, a
    tunnel is an object in the ground. Grid sizes snap to Gazebo's 2^n + 1

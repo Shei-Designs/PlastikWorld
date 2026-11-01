@@ -141,6 +141,11 @@ brush on the tablet with a finger and with a stylus.
 
 ## Phase 4. Heightmap image import (S)
 
+**Done 2026-11-02**: a PNG reader of its own (`io/png.ts`, every colour
+type and depth, not interlaced), other images through the browser, the
+import dialog with the grid, the area and the black and white heights, and
+a round-trip test against the image the Gazebo writer emits.
+
 - Open an 8 or 16-bit greyscale PNG (the decoder from phase 1), ask for
   the area and the height range, resample to the snapped grid.
 - Colour PNGs are read as luminance; non-square images stretch to the
