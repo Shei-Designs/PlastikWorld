@@ -12,6 +12,10 @@
     "dialog:allow-message",
     "dialog:allow-ask",
     "opener:allow-open-url",
-    "device:default"
+    "device:default",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://copernicus-dem-30m.s3.amazonaws.com/*" }]
+    }
   ]
 }

@@ -90,6 +90,9 @@ export function Viewport() {
   useEffect(() => viewerRef.current?.setOptions({ theme: prefs.theme, grid: prefs.grid, snap: prefs.snap }), [prefs.theme, prefs.grid, prefs.snap]);
   useEffect(() => viewerRef.current?.setPlacing(placing !== null), [placing]);
   useEffect(() => viewerRef.current?.setSculpt(tool ? tool.brush.radius : null), [tool]);
+  // A terrain of another size (real elevation is kilometres across) would leave the camera where it was: refit.
+  const [sizeX, sizeY] = world.terrain.size;
+  useEffect(() => void viewerRef.current?.fit(), [sizeX, sizeY]);
 
   const placingLabel = placing ? (placing.kind === 'asset' ? world.assets.find((a) => a.id === placing.asset)?.name ?? 'object' : placing.kind === 'light' ? `${placing.light} light` : 'spawn point') : null;
   const empty = world.objects.length === 0 && world.spawns.length === 0;

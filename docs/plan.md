@@ -156,6 +156,14 @@ heightmap a user already has imported and exported back within a sample.
 
 ## Phase 5. Elevation import (L)
 
+**Done 2026-11-02**, both steps, with one simplification: the place is given
+by latitude, longitude and a radius rather than picked on a map (a map would
+bring in a tile source and attribution of its own). `terrain/elevation.ts`
+reads a GeoTIFF with `geotiff`, in place over range requests for a cloud
+optimised one; the Copernicus bucket sends no CORS headers, so the app
+fetches through `tauri-plugin-http` on desktop and Android, and a plain
+browser says so. USGS 3DEP by download later; Copernicus covers the US too.
+
 Two steps so the first works offline and on Android.
 
 1. **A GeoTIFF the user has** (USGS 3DEP, SRTM, Copernicus DEM tiles are

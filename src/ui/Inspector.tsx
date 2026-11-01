@@ -4,7 +4,7 @@ import { BRUSH_KINDS, DEFAULT_BRUSH, DEFAULT_FIELD, FIELD_KINDS } from '../terra
 import type { FieldSpec } from '../terrain/brush';
 import { GRID_MAX, GRID_SIZES, assetOf } from '../model/types';
 import type { Light, LightKind, Placed, SpawnPoint, Terrain, World } from '../model/types';
-import { deleteSelected, duplicateSelected, generateTerrain, importHeightmap, setBrush, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { deleteSelected, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, setBrush, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
 import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
@@ -142,8 +142,9 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
   const update = (patch: Partial<Terrain>) => updateTerrain({ ...terrain, ...patch } as Terrain);
   const tool = useEditor((s) => s.tool);
   const brush = tool?.brush ?? DEFAULT_BRUSH;
-  // What the next generated field looks like; not part of the world, so it lives here.
+  // What the next generated field looks like, and where the next fetched elevation is; not part of the world, so they live here.
   const [field, setField] = useState<FieldSpec>(DEFAULT_FIELD);
+  const [place, setPlace] = useState({ lat: 45.9763, lon: 7.6586, radius: 2000 });
   const [lo, hi] = terrain.kind === 'heightmap' ? range(terrain.heights) : [0, 0];
   return (
     <div className="params">
@@ -176,9 +177,7 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
           />
           <dl className="info-rows">
             <dt>Spacing</dt>
-            <dd>
-              {((terrain.size[0] / (terrain.cols - 1)) * 100).toFixed(1)} × {((terrain.size[1] / (terrain.rows - 1)) * 100).toFixed(1)} cm
-            </dd>
+            <dd>{spacingText(terrain.size[0] / (terrain.cols - 1), terrain.size[1] / (terrain.rows - 1))}</dd>
             <dt>Lowest, highest</dt>
             <dd>
               {lo.toFixed(2)} m, {hi.toFixed(2)} m
@@ -227,17 +226,39 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
             </button>
           </div>
           <h2>Import</h2>
-          <button type="button" className="chip" onClick={() => void importHeightmap()}>
-            Heightmap image…
-          </button>
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <button type="button" className="chip" onClick={() => void importHeightmap()}>
+              Heightmap image…
+            </button>
+            <button type="button" className="chip" onClick={() => void importElevation()}>
+              Elevation (GeoTIFF)…
+            </button>
+          </div>
           <p className="note">
-            A greyscale PNG (8 or 16-bit; a colour image is read by its brightness), black the lowest point and white the highest. The grid is 2^n + 1 samples a side so that Gazebo, MuJoCo and Isaac Sim all get the very same heights; past {GRID_MAX} the Isaac stage's ground mesh gets heavy.
+            A greyscale PNG (8 or 16-bit; a colour image is read by its brightness), black the lowest point and white the highest; or a GeoTIFF of real elevation (USGS 3DEP, SRTM, Copernicus DEM tiles), a box of which is read in meters.
+          </p>
+          <h2>A real place</h2>
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <NumberField label="Latitude" unit="°" value={place.lat} min={-90} max={90} step={0.01} decimals={4} onChange={(lat) => setPlace({ ...place, lat })} />
+            <NumberField label="Longitude" unit="°" value={place.lon} min={-180} max={180} step={0.01} decimals={4} onChange={(lon) => setPlace({ ...place, lon })} />
+          </div>
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <NumberField label="Around it" unit="m" value={place.radius} min={100} max={50000} step={100} decimals={0} onChange={(radius) => setPlace({ ...place, radius })} />
+            <button type="button" className="chip" onClick={() => void fetchElevation(place.lat, place.lon, place.radius)}>
+              Fetch Copernicus DEM
+            </button>
+          </div>
+          <p className="note">
+            Copernicus GLO-30 from AWS Open Data, 30 m a sample the world over, fetched over the network for the tile the place is in. The grid is 2^n + 1 samples a side so that Gazebo, MuJoCo and Isaac Sim all get the very same heights; past {GRID_MAX} the Isaac stage's ground mesh gets heavy.
           </p>
         </>
       )}
     </div>
   );
 }
+
+/** "12.5 × 12.5 cm" for a yard, "24.2 × 24.8 m" for a landscape. */
+const spacingText = (dx: number, dy: number): string => (Math.max(dx, dy) >= 1 ? `${dx.toFixed(1)} × ${dy.toFixed(1)} m` : `${(dx * 100).toFixed(1)} × ${(dy * 100).toFixed(1)} cm`);
 
 /** The heights on an `n` × `n` grid, bilinear. */
 const resampleTo = (terrain: Extract<Terrain, { kind: 'heightmap' }>, n: number): Float32Array => resample(terrain, n);

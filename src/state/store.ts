@@ -14,6 +14,8 @@ import { DEFAULT_BRUSH, dab, generateField } from '../terrain/brush';
 import type { Brush, FieldSpec, Window as BrushWindow } from '../terrain/brush';
 import { heightsFromImage, readImage } from '../terrain/image';
 import type { GreyImage, ImageFit } from '../terrain/image';
+import { boxAround, copernicusTile, heightsFromDem, openDem, openDemUrl } from '../terrain/elevation';
+import type { Dem, DemBox, DemFit, FetchLike } from '../terrain/elevation';
 import { parseWorld, parseWorldText, serializeWorld, serializeWorldText } from '../model/file';
 import { add, newId, uniqueName } from '../model/math';
 import { DEFAULT_PHYSICS, GRID_DEFAULT, assetPresent, emptyWorld } from '../model/types';
@@ -57,6 +59,8 @@ export interface EditorState {
   tool: Tool | null;
   /** An image read as a heightmap, waiting for its size and height range in the import dialog. */
   heightmapImport: { name: string; image: GreyImage } | null;
+  /** A DEM opened or fetched, with the box of it to take, waiting in the elevation dialog. */
+  elevationImport: { dem: Dem; box: DemBox } | null;
   /** Where worlds are kept, once start-up has looked: the folder (null in a browser), and whether another can be chosen. */
   storage: { location: string | null; defaultDir: string | null; fixed: boolean } | null;
   /** The worlds browser is open. */
@@ -83,6 +87,7 @@ let state: EditorState = {
   placing: null,
   tool: null,
   heightmapImport: null,
+  elevationImport: null,
   storage: null,
   browsing: false,
   panel: null,
@@ -331,12 +336,14 @@ export async function receiveFiles(files: platform.PickedFile[]): Promise<void> 
   const glbs = files.filter((f) => /\.glb$/i.test(f.name));
   const zips = files.filter((f) => /\.zip$/i.test(f.name));
   const images = files.filter((f) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(f.name));
+  const dems = files.filter((f) => /\.tiff?$/i.test(f.name));
   if (worlds.length) await importWorldFile(worlds[0]);
   if (glbs.length) await importObjects(glbs);
   for (const zip of zips) await importRobot(zip);
   if (images.length) await importHeightmap(images[0]);
-  const other = files.length - worlds.length - glbs.length - zips.length - images.length;
-  if (other > 0) tell('info', `Only worlds, GLB objects, zipped robot packages and heightmap images can be dropped here.`);
+  if (dems.length) await importElevation(dems[0]);
+  const other = files.length - worlds.length - glbs.length - zips.length - images.length - dems.length;
+  if (other > 0) tell('info', `Only worlds, GLB objects, zipped robot packages, heightmap images and GeoTIFFs can be dropped here.`);
 }
 
 // --- changing things -----------------------------------------------------------
@@ -435,6 +442,74 @@ export function applyHeightmap(fit: ImageFit, size: [number, number]): void {
   set({ heightmapImport: null });
   const { width, height } = pending.image;
   if (width !== height) tell('info', `${pending.name} is ${width} × ${height}; it was stretched onto the square grid, so the terrain's width and depth say what it covers.`);
+}
+
+const DEM_FILTER = [{ name: 'GeoTIFF elevation', extensions: ['tif', 'tiff'] }];
+
+/** "Elevation (GeoTIFF)…": opens a DEM the user has, with the middle of it chosen to start with. */
+export async function importElevation(file?: platform.PickedFile): Promise<void> {
+  try {
+    const picked = file ?? (await platform.pickFiles({ filters: DEM_FILTER }))[0];
+    if (!picked) return;
+    set({ busy: `Reading ${picked.name}…` });
+    const dem = await openDem(picked.name, picked.bytes);
+    const side = Math.min(dem.width, dem.height);
+    const box = { x0: Math.floor((dem.width - side) / 2), y0: Math.floor((dem.height - side) / 2), x1: Math.floor((dem.width - side) / 2) + side, y1: Math.floor((dem.height - side) / 2) + side };
+    set({ elevationImport: { dem, box }, tool: null, placing: null, pick: { kind: 'terrain' }, selection: [] });
+  } catch (err) {
+    fail(err);
+  } finally {
+    set({ busy: null });
+  }
+}
+
+/** The fetch tiles come through: the Rust side's in the app (the bucket sends no CORS headers), the browser's otherwise, which may be refused. */
+async function tileFetcher(): Promise<FetchLike> {
+  if (platform.isDesktop()) {
+    const { fetch } = await import('@tauri-apps/plugin-http');
+    return (url, init) => fetch(url, init);
+  }
+  return (url, init) => fetch(url, init);
+}
+
+/** Fetches the Copernicus GLO-30 tile holding a place and takes `radius` meters around it. */
+export async function fetchElevation(lat: number, lon: number, radius: number): Promise<void> {
+  const tile = copernicusTile(lat, lon);
+  set({ busy: `Fetching ${tile.name}…` });
+  try {
+    const dem = await openDemUrl(tile.name, tile.url, await tileFetcher());
+    const box = boxAround(dem, lat, lon, radius);
+    set({ elevationImport: { dem, box }, tool: null, placing: null, pick: { kind: 'terrain' }, selection: [] });
+    if (box.x0 === 0 || box.y0 === 0 || box.x1 === dem.width || box.y1 === dem.height) tell('info', 'The box reaches the edge of the 1° tile; only this tile is taken.');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    tell('error', platform.isDesktop() ? `Could not fetch the tile: ${message}` : `Could not fetch the tile from a browser (${message}); the desktop and Android apps fetch it through their own side.`);
+  } finally {
+    set({ busy: null });
+  }
+}
+
+export const setElevationBox = (box: DemBox): void => {
+  if (state.elevationImport) set({ elevationImport: { ...state.elevationImport, box } });
+};
+export const closeElevation = (): void => set({ elevationImport: null });
+
+/** Puts the chosen box of the DEM on the terrain, one step of the history, sized to what it covers on the ground. */
+export async function applyElevation(fit: DemFit): Promise<void> {
+  const pending = state.elevationImport;
+  if (!pending) return;
+  set({ busy: 'Reading the elevation…' });
+  try {
+    const result = await heightsFromDem(pending.dem, pending.box, fit);
+    const t = state.world.terrain;
+    updateTerrain({ kind: 'heightmap', size: result.size, friction: t.friction, rows: fit.samples, cols: fit.samples, heights: result.heights });
+    set({ elevationImport: null });
+    tell('ok', `${result.size[0].toFixed(0)} × ${result.size[1].toFixed(0)} m of ${pending.dem.name}, ${result.lowest.toFixed(1)} to ${result.highest.toFixed(1)} m${result.filled ? `, ${result.filled} no-data samples filled from their neighbours` : ''}.`);
+  } catch (err) {
+    fail(err);
+  } finally {
+    set({ busy: null });
+  }
 }
 
 /** Replaces the heights with a generated field, one step of the history. */

@@ -24,6 +24,8 @@ tauri-plugin-dialog = "2"
 # Used from Rust only, so that files picked on Android (content:// URIs) can be read and written.
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
+# Elevation tiles fetched from the Rust side: the webview's own fetch is refused by buckets that send no CORS headers.
+tauri-plugin-http = "2"
 # Android: the keyboard and keypad the app is driven with, the documents the pickers hand out, exports to Downloads, the share sheet. PlastikCAD's, lifted.
 tauri-plugin-device = { path = "plugins/device" }
 serde = { version = "1", features = ["derive"] }

@@ -32,6 +32,7 @@ import {
 } from './state/store';
 import { About } from './ui/About';
 import { ExportDialog } from './ui/ExportDialog';
+import { ElevationDialog } from './ui/ElevationDialog';
 import { HeightmapDialog } from './ui/HeightmapDialog';
 import { Inspector } from './ui/Inspector';
 import { Sidebar } from './ui/Sidebar';
@@ -188,6 +189,7 @@ export default function App() {
       <About open={about} onClose={() => showAbout(false)} />
       <ExportDialog />
       <HeightmapDialog />
+      <ElevationDialog />
       <WorldsDialog />
     </div>
   );

@@ -99,9 +99,16 @@ one undo step. **Import a heightmap image** (a greyscale PNG, 8 or 16-bit;
 a colour image is read by its brightness; dropping an image on the window
 works too) and say what it covers and how high black and white are; the top
 of the image is +Y, as Gazebo reads it, so the image a Gazebo export carries
-comes back the same way up. Terrain is made here and never imported as a
-mesh: a bridge spans a valley as an object, a tunnel is an object in the
-ground.
+comes back the same way up. **Import real elevation**: a GeoTIFF you have
+(USGS 3DEP, SRTM and Copernicus DEM tiles all are), or a place by latitude
+and longitude, for which the app fetches the Copernicus GLO-30 tile (30 m a
+sample, the world over) from AWS Open Data and reads only the part it needs.
+Drag a box on the picture of the DEM, and the terrain takes what that box
+covers in meters, north up, no-data holes filled from around them, the
+lowest point brought to zero unless you keep the heights above sea level.
+Over a few kilometres the flat-earth error is well under a percent. Terrain
+is made here and never imported as a mesh: a bridge spans a valley as an
+object, a tunnel is an object in the ground.
 
 ### Controls
 
@@ -232,7 +239,8 @@ exports with a note in the other two, the way robot package clashes do now.
 2. **Terrain tools.** Sculpting in the viewer (raise, lower, smooth, flatten
    and set, done) and seeded fields (rolling, hills, ridges, craters, done);
    a heightmap from an image (8 or 16-bit greyscale PNG with a size and a
-   height scale, done); real elevation from GeoTIFF or DEM tiles (USGS 3DEP, SRTM,
+   height scale, done); real elevation (a GeoTIFF, or a Copernicus tile
+   fetched for a place, done; a map picker later); real elevation from GeoTIFF or DEM tiles (USGS 3DEP, SRTM,
    Copernicus), a box picked and resampled onto the grid. Terrain is made
    here, never imported as a mesh: a bridge spans a valley as an object, a
    tunnel is an object in the ground. Grid sizes snap to Gazebo's 2^n + 1
