@@ -1,0 +1,44 @@
+{
+  "name": "plastikcad-world-builder",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Build simulation worlds for Gazebo, MuJoCo and Isaac Sim: place PlastikCAD objects and robots, write the scene for each engine",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc",
+    "brand": "node docs/brand/draw.cjs",
+    "smoke:fixtures": "WORLD_FIXTURES_OUT=fixtures/out vitest run src/io/fixtures.test.ts",
+    "smoke:gazebo": "pnpm smoke:fixtures && tools/gazebo_smoke.sh fixtures/out/gazebo",
+    "smoke:mujoco": "pnpm smoke:fixtures && ${MUJOCO_PYTHON:-python3} tools/mujoco_smoke.py fixtures/out/mujoco",
+    "smoke:isaac": "pnpm smoke:fixtures && ${ISAACSIM_PYTHON:-$HOME/isaacsim-env/bin/python} tools/isaac_smoke.py fixtures/out/isaac",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "fflate": "^0.8.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^24",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "opentype.js": "^2.0.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^5.0.3"
+  }
+}
