@@ -190,7 +190,7 @@ export function isaacBundle(world: World, resolved: Resolved): ExportBundle {
   const usda = `#usda 1.0
 (
     defaultPrim = "World"
-    doc = "Made with PlastikCAD World Builder. Units: meters, kilograms, radians."
+    doc = "Made with PlastikWorld. Units: meters, kilograms, radians."
     endTimeCode = 1000000
     metersPerUnit = 1
     startTimeCode = 0

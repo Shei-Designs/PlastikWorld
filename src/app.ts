@@ -1,10 +1,10 @@
 // The one place the app's name and its publisher live in the frontend.
-export const APP_NAME = 'PlastikCAD World Builder';
+export const APP_NAME = 'PlastikWorld';
 /** The short form, for window titles and the places the full name will not fit. */
-export const APP_SHORT_NAME = 'World Builder';
+export const APP_SHORT_NAME = 'PlastikWorld';
 export const APP_VERSION = '0.1.0';
 /** Where the source code and license live, shown in the About box. */
-export const APP_URL = 'https://github.com/Shei-Designs/PlastikCAD-World-Builder';
+export const APP_URL = 'https://github.com/Shei-Designs/PlastikWorld';
 /** The app this one is the companion of: it makes the objects and robots, this one places them. */
 export const COMPANION_NAME = 'PlastikCAD';
 export const COMPANION_URL = 'https://github.com/Shei-Designs/PlastikCAD';

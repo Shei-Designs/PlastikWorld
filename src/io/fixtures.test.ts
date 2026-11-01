@@ -70,7 +70,7 @@ function crateGlb(edge: number, rgb: Vec3): ResolvedMesh {
   bin.set(new Uint8Array(nor.buffer), pos.byteLength);
   bin.set(new Uint8Array(idx.buffer), pos.byteLength + nor.byteLength);
   const json = JSON.stringify({
-    asset: { version: '2.0', generator: 'PlastikCAD World Builder fixtures' },
+    asset: { version: '2.0', generator: 'PlastikWorld fixtures' },
     scene: 0,
     scenes: [{ nodes: [0] }],
     nodes: [{ mesh: 0, name: 'Crate' }],

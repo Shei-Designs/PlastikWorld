@@ -1,4 +1,4 @@
-// Draws the PlastikCAD World Builder brand assets after the Shei Designs design
+// Draws the PlastikWorld brand assets after the Shei Designs design
 // system and its product rules (design-reference/PRODUCTS.md): the product
 // tile, a green square with the pin-on-a-plot mark in Carbon, its Android and
 // macOS variants, and the README banner. Run with `pnpm brand`.
@@ -82,14 +82,14 @@ fs.writeFileSync(path.join(root, 'docs/brand/android-bg.svg'), `<svg xmlns="http
 fs.writeFileSync(path.join(root, 'docs/brand/icon-macos.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g transform="translate(9 9) scale(0.82)"><path d="${TILE}" fill="${GREEN}"/>${mark(64)}</g></svg>\n`);
 
 // --- the banner: 1280 x 360, Carbon, tile + name + one-liner + mono metadata + Shei Designs ------
-const name = text(grotesk, 'PlastikCAD World Builder', 328, 172, 68);
+const name = text(grotesk, 'PlastikWorld', 328, 172, 68);
 const line = text(inter400, 'Build worlds for robot simulation.', 330, 226, 30);
 const meta = text(mono, 'linux · windows · macos      gpl-3.0      gazebo sdf · mujoco mjcf · isaac usd', 332, 274, 17);
 const shei = text(inter800, 'Shei Designs', 0, 0, 22, { tracking: -0.02 });
 const sheiX = 1184 - shei.width - 14;
 const sheiPath = text(inter800, 'Shei Designs', sheiX, 318, 22, { tracking: -0.02 });
 const banner = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" role="img" aria-labelledby="t">
-  <title id="t">PlastikCAD World Builder: build worlds for robot simulation. A Shei Designs project.</title>
+  <title id="t">PlastikWorld: build worlds for robot simulation. A Shei Designs project.</title>
   <rect width="1280" height="360" rx="28" fill="${CARBON}"/>
   <g transform="translate(80 80) scale(2)"><path d="${TILE}" fill="${GREEN}"/>${mark(64)}</g>
   <path d="${name.d}" fill="${LINEN}"/>

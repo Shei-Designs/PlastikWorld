@@ -1,4 +1,4 @@
-PlastikCAD World Builder is a desktop app for building the world a robot is simulated in: place the objects and robots PlastikCAD makes, set the ground, lights and spawn points, and export the scene for Gazebo, MuJoCo or Isaac Sim.
+PlastikWorld is a desktop app for building the world a robot is simulated in: place the objects and robots PlastikCAD makes, set the ground, lights and spawn points, and export the scene for Gazebo, MuJoCo or Isaac Sim.
 
 ## Download
 
@@ -16,5 +16,5 @@ PlastikCAD World Builder is a desktop app for building the world a robot is simu
 These builds are not code-signed yet, so the operating system will ask before running them.
 
 - **Windows:** SmartScreen shows "Windows protected your PC". Choose **More info**, then **Run anyway**.
-- **macOS:** open the app once, dismiss the warning, then go to **System Settings → Privacy & Security** and choose **Open Anyway**. If macOS reports that the app is damaged, run `xattr -cr "/Applications/PlastikCAD World Builder.app"` in Terminal and open it again.
+- **macOS:** open the app once, dismiss the warning, then go to **System Settings → Privacy & Security** and choose **Open Anyway**. If macOS reports that the app is damaged, run `xattr -cr "/Applications/PlastikWorld.app"` in Terminal and open it again.
 - **Linux:** no extra steps.

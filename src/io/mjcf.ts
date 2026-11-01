@@ -108,7 +108,7 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
     bodies.push(`    <frame name="${escapeXml(bodyName)}_spawn" pos="${vec(placed.pose.xyz)}" quat="${quat(placed.pose.rpy)}"><attach model="${model}" body="${escapeXml(asset.rootBody)}" prefix="${escapeXml(bodyName)}_"/></frame>`);
   }
   const xml = [
-    '<!-- Made with PlastikCAD World Builder. Units: meters, kilograms, radians. -->',
+    '<!-- Made with PlastikWorld. Units: meters, kilograms, radians. -->',
     `<mujoco model="${escapeXml(modelName)}">`,
     '  <compiler angle="radian" meshdir="meshes" autolimits="true"/>',
     `  <option timestep="${TIMESTEP}" gravity="${vec(world.gravity)}" integrator="implicitfast"/>`,

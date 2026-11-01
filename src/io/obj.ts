@@ -3,7 +3,7 @@ import type { MeshData } from './export';
 import { fmt } from './format';
 
 export function writeObj(name: string, data: MeshData): string {
-  const lines = [`# ${name}: made with PlastikCAD World Builder. Units: meters, Z up.`, `o ${name.replace(/\s+/g, '_')}`];
+  const lines = [`# ${name}: made with PlastikWorld. Units: meters, Z up.`, `o ${name.replace(/\s+/g, '_')}`];
   const p = data.positions;
   const c = data.colors;
   for (let i = 0; i < p.length; i += 3) {

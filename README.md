@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/banner.svg" alt="PlastikCAD World Builder: build worlds for robot simulation" width="100%">
+  <img src="docs/banner.svg" alt="PlastikWorld: build worlds for robot simulation" width="100%">
 </h1>
 
 Build the world a robot is simulated in: place the objects and robots that
@@ -7,7 +7,7 @@ Build the world a robot is simulated in: place the objects and robots that
 ground, the lights and the spawn points, and write the scene for Gazebo,
 MuJoCo or Isaac Sim in each engine's own format.
 
-PlastikCAD makes the things (a staircase, a table, a robot); World Builder
+PlastikCAD makes the things (a staircase, a table, a robot); PlastikWorld
 places them and describes the scene. The split is deliberate: PlastikCAD
 stays a modeller with a flat floor, and this app is the environment editor
 beside it, for people doing rapid prototyping on open source tools (ROS 2,
@@ -16,7 +16,7 @@ Gazebo, MuJoCo, Isaac Sim, Blender) who want one pipeline instead of five.
 Runs locally on Linux, Windows and macOS; nothing leaves your machine. Free
 software under the GPL-3.0.
 
-PlastikCAD World Builder is a [Shei Designs](https://sheidesigns.com) project,
+PlastikWorld is a [Shei Designs](https://sheidesigns.com) project,
 designed and built by [Andrew O'Shei](https://andrewoshei.com).
 
 > **Status: bootstrapped, not yet released.** The model, the three engine
@@ -156,17 +156,46 @@ docs/brand/           the icon and banner, and the script that draws them
 
 ## Roadmap
 
-In the order the handoff suggests:
+Decided with Andrew on 2026-11-01, in order. The line for the whole app:
+what all three engines can read is a feature; what one engine does alone
+exports with a note in the other two, the way robot package clashes do now.
 
-1. Drive the robots in the exported worlds from the smoke tests (cmd_vel in
-   Gazebo, the actuators in MuJoCo, the ROS 2 graph in Isaac), as
-   PlastikCAD's smoke tests do for the packages alone.
-2. A heightmap from an image, and terrain painting.
-3. A worlds browser with thumbnails; the shared parts bin PlastikCAD keeps in
-   `Parts/`.
-4. Launch the simulator from the app (`gz sim`, `python -m mujoco.viewer`).
-5. Android, through the same seams as PlastikCAD (`platform.ts`).
-6. Blender: a GLB of the whole scene, props and robots posed.
+1. **Drive the robots in the exported worlds** from the smoke tests (cmd_vel
+   in Gazebo, the actuators in MuJoCo, the ROS 2 graph in Isaac), so the
+   exports are proven usable, not just loadable.
+2. **Terrain tools.** Sculpting in the viewer (raise, lower, smooth, flatten);
+   a heightmap from an image (8 or 16-bit greyscale PNG with a size and a
+   height scale); real elevation from GeoTIFF or DEM tiles (USGS 3DEP, SRTM,
+   Copernicus), a box picked and resampled onto the grid. Terrain is made
+   here, never imported as a mesh: a bridge spans a valley as an object, a
+   tunnel is an object in the ground. Grid sizes snap to Gazebo's 2^n + 1
+   (65 to 1025 samples a side, 2049 with a warning, since Isaac gets the
+   ground as a triangle mesh); the user picks area and spacing and sees the
+   sample count. Past 129 square the heights move to a 16-bit PNG beside the
+   world file.
+3. **Surfaces.** A table of materials (friction, restitution, colour,
+   texture) and painted zones on the terrain, rectangular first because
+   MuJoCo heightfields are rectangles: Isaac binds a material per triangle,
+   Gazebo and MuJoCo get one ground collision per zone.
+4. **A parts library** of generic set pieces, indoor (walls, doors, floors,
+   stairs, ramps, tables, shelves, pallets, boxes, cones) and outdoor
+   (curbs, road segments, parking lines, lamp posts, fences, barriers,
+   trees, rocks, bridges). Fixed pieces ship as PlastikCAD packages with the
+   app; wall runs, slabs, ramps, stairs and fence runs are parametric and
+   generated here. Buildings with indoor and outdoor space, and parking
+   lots, are built from these on the terrain.
+5. **Demo drive.** Kinematic teleoperation in the viewer (keyboard or
+   gamepad; differential, Ackermann or holonomic), the robot following the
+   ground by ray cast with bounding-box collision against props. Not a
+   physics simulation: a check that the world fits the robot before export.
+6. **Sky, lighting, fog and wind.** Sky and time of day, fog for cameras
+   and lidar (Gazebo and Isaac render it, MuJoCo does not), a global wind
+   vector (Gazebo's wind effects, MuJoCo's `wind`, a note for Isaac).
+7. Launch the simulator from the app; a worlds browser with thumbnails;
+   Android through `platform.ts`; a GLB of the whole scene for Blender.
+
+Parked: rain and snow (no engine has them) and water (Gazebo alone, through
+its buoyancy and hydrodynamics plugins), as a later opt-in with notes.
 
 ## License
 

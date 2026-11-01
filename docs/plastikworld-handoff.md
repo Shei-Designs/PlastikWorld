@@ -1,6 +1,6 @@
-# Handoff: a world builder beside PlastikCAD
+# Handoff: PlastikWorld, the world app beside PlastikCAD
 
-Written 2026-11-01 for whoever starts the companion app. It says what the
+Written 2026-11-01 for whoever starts the companion app, since named PlastikWorld. It says what the
 app is for, what PlastikCAD hands it, what it must hand the simulators, and
 what was decided already. Nothing here is built; it is a brief, not a spec.
 
@@ -18,7 +18,7 @@ objects, terrain, lights, spawn points, physics properties of the ground,
 and writing the result for each engine's own scene format. Andrew's decision
 (2026-11-01) is to keep that out of PlastikCAD and make a focused companion
 app for it. The split: PlastikCAD makes the things (a staircase, a table, a
-robot), the world builder places them and describes the scene.
+robot), PlastikWorld places them and describes the scene.
 
 Audience: the same as PlastikCAD's. People doing rapid prototyping on open
 source tools (ROS 2, Gazebo, MuJoCo, Isaac Sim, Blender) who want one
@@ -42,16 +42,16 @@ Everything is millimeters and Z up inside PlastikCAD; exports convert.
   as ROS expects.
 - **The design file** `.plastikcad` (JSON, `format: "plastikcad"`,
   `version` 2): the scene as shapes, parts and operations rather than
-  triangles, plus the robot description under `robot`. The world builder
+  triangles, plus the robot description under `robot`. PlastikWorld
   should not need to read it; GLB and the robot packages are the interface.
   If it ever does, `src/model/file.ts` in the PlastikCAD repo is the reader.
 
 PlastikCAD's own repo: `github.com/Shei-Designs/PlastikCAD`. The export
 writers live in `src/io/` (`gltf.ts`, `urdf.ts`, `sdf.ts`, `gazebo.ts`,
 `mjcf.ts`, `rosPackage.ts`) and `src/robot/export.ts`; read them before
-deciding how the world builder imports a robot.
+deciding how PlastikWorld imports a robot.
 
-## 3. What the world builder must hand the simulators
+## 3. What PlastikWorld must hand the simulators
 
 One scene, written for each engine in its own terms:
 
@@ -66,7 +66,7 @@ One scene, written for each engine in its own terms:
   attaching its model; `src/io/mjcf.ts` in PlastikCAD shows a working
   floor, hfield, slope and the steps/ramp blocks (`worldBlocks`).
 - **Isaac Sim**: a USD stage. The robot comes in through Isaac's URDF
-  importer (the ROS package), so the world builder's job is the stage
+  importer (the ROS package), so PlastikWorld's job is the stage
   around it: ground, props as USD meshes with collision, lights, and a
   reference to the imported robot. Writing USD from TypeScript is not
   solved; options are a Python side using `pxr` (Isaac's own Python), or
@@ -92,7 +92,7 @@ heightmap (one source, three writers) or built from placed blocks.
   register there).
 - PlastikCAD stays flat: no terrain, no world authoring, no engine-specific
   scene settings will be added to it. Objects like stairs are modeled in
-  PlastikCAD and placed in the world builder.
+  PlastikCAD and placed in PlastikWorld.
 - One robot per PlastikCAD project (one base link). A world with several
   robots takes several packages.
 - Same stack is the easy choice, not a requirement: Tauri 2, Vite, React 19,
@@ -100,7 +100,7 @@ heightmap (one source, three writers) or built from placed blocks.
   draws markers, axis arrows and align dots; its camera controls and touch
   handling are worth lifting rather than redoing.
 - Andrew runs the apps on Linux and on an Android tablet; a desktop-first
-  world builder is fine, but do not design anything that cannot work in a
+  PlastikWorld is fine, but do not design anything that cannot work in a
   webview.
 
 ## 5. Open questions for the first session
@@ -126,5 +126,38 @@ heightmap (one source, three writers) or built from placed blocks.
 PlastikCAD repo export four reference robots (rover, car, quadruped, arm)
 and run them in MuJoCo, in ROS 2 Jazzy and Gazebo (Docker), and in Isaac
 Sim. The exported packages land in `fixtures/out/`. They are ready-made
-robots for the world builder to place and test with, and the smoke scripts
+robots for PlastikWorld to place and test with, and the smoke scripts
 show how each simulator is launched headless and checked.
+
+## 7. Decided in the second session (2026-11-01, evening)
+
+Added after the bootstrap, once the first exports had run in all three
+engines. The README's Roadmap carries the order; this is the reasoning.
+
+- **Name: PlastikWorld.** Plastik is the family mark and stays on every
+  product in it, whatever the house convention for one-word names
+  elsewhere; PlastikBox and PlastikENV were the other candidates. The app
+  is bundled with PlastikCAD. Colour: Terrain green `#19DC5A`, confirmed.
+- **Terrain is made here.** Sculpting, heightmap images and real elevation
+  (GeoTIFF/DEM) are the three sources. No terrain mesh import, from
+  PlastikCAD or Blender: PlastikCAD is for objects, and the workflow is a
+  terrain first, then objects on it (a valley plus a bridge object, not a
+  bridge carved into the ground).
+- **Grid size, lowest common denominator.** Gazebo needs 2^n + 1 samples a
+  side and reads a heightmap image; Isaac gets a triangle mesh, which is
+  the real ceiling (a 4097 grid is 33 million triangles). So the grid snaps
+  to 65 … 1025, 2049 with a warning, all three engines get identical
+  samples, and the user trades area against spacing in the app.
+- **Surfaces matter.** Isaac can bind materials per triangle; Gazebo and
+  MuJoCo have one friction per collision, so zones become separate ground
+  collisions in those two. Rectangular zones first (MuJoCo heightfields are
+  rectangles), free-form later.
+- **Features:** a generic parts library (indoor and outdoor; fixed pieces as
+  bundled PlastikCAD packages, runs and slabs parametric in-app), a
+  kinematic demo drive for checking fit before export, buildings and
+  parking lots assembled from parts on the terrain.
+- **The line.** Features are what all three engines read. Wind is the one
+  weather element with physics in two of them (Gazebo, MuJoCo); fog, sky
+  and time of day are rendering for cameras and lidar; rain and snow exist
+  in no engine; water is Gazebo only. Anything one engine does alone is an
+  opt-in that exports with a note elsewhere.

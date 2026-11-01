@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PlastikCAD World Builder",
-  "mainBinaryName": "plastikcad-world-builder",
+  "productName": "PlastikWorld",
+  "mainBinaryName": "plastikworld",
   "version": "0.1.0",
-  "identifier": "com.sheidesigns.worldbuilder",
+  "identifier": "com.sheidesigns.plastikworld",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1440",
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "PlastikCAD World Builder",
+        "title": "PlastikWorld",
         "width": 1480,
         "height": 900,
         "minWidth": 1200,
@@ -43,12 +43,12 @@
     "fileAssociations": [
       {
         "ext": ["plastikworld"],
-        "name": "PlastikCAD world",
-        "description": "PlastikCAD World Builder world",
+        "name": "PlastikWorld world",
+        "description": "PlastikWorld world",
         "mimeType": "application/x-plastikworld",
         "role": "Editor",
         "exportedType": {
-          "identifier": "com.sheidesigns.worldbuilder.world",
+          "identifier": "com.sheidesigns.plastikworld.world",
           "conformsTo": ["public.data"]
         }
       }

@@ -315,7 +315,7 @@ mod tests {
     impl TempDir {
         fn new() -> Self {
             let n = DIRS.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!("worldbuilder-test-{}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("plastikworld-test-{}-{n}", std::process::id()));
             fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
         }

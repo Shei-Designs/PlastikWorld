@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    plastikcad_world_builder_lib::run()
+    plastikworld_lib::run()
 }

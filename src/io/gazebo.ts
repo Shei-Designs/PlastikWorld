@@ -113,7 +113,7 @@ function launchPy(worldFile: string, robots: { placed: Placed; asset: RobotAsset
         ),`,
     )
     .join('\n');
-  return `# Made with PlastikCAD World Builder: starts Gazebo with the world and spawns each robot
+  return `# Made with PlastikWorld: starts Gazebo with the world and spawns each robot
 # from its ROS 2 package at its place, with ros_gz_sim installed:
 #   ros2 launch ${worldFile.replace(/\.sdf$/, '')}.launch.py
 # On a machine without a display, headless:=true runs the server alone. Each robot
@@ -212,7 +212,7 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
     }
   }
   const sdf = `<?xml version="1.0"?>
-<!-- Made with PlastikCAD World Builder. Units: meters, kilograms, radians. -->
+<!-- Made with PlastikWorld. Units: meters, kilograms, radians. -->
 <sdf version="1.11">
   <world name="${escapeXml(worldName)}">
     <gravity>${vec(world.gravity)}</gravity>

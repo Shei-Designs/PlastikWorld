@@ -1,5 +1,5 @@
 {
-  "name": "plastikcad-world-builder",
+  "name": "plastikworld",
   "private": true,
   "version": "0.1.0",
   "description": "Build simulation worlds for Gazebo, MuJoCo and Isaac Sim: place PlastikCAD objects and robots, write the scene for each engine",
