@@ -1322,3 +1322,16 @@ dialog.sheet.wide {
   margin: 0;
   font-family: var(--mono, ui-monospace, monospace);
 }
+
+/* A surface in the world settings: colour, name, friction, bounce, remove. */
+.material-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: end;
+  margin-bottom: 6px;
+}
+
+.material-row .field > span:first-child {
+  font-size: 11px;
+}

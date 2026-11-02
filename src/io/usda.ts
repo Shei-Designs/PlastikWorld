@@ -9,6 +9,7 @@ import type { Light, Placed, Pose, Terrain, Vec3, World } from '../model/types';
 import { bundleName, claimFolder, fmt } from './export';
 import type { ExportBundle, ExportFile, MeshData, Resolved } from './export';
 import { identifier } from './format';
+import { ZONE_LIFT, placedZones, zoneMesh } from './zones';
 
 const tuple = (v: Vec3, decimals = 6): string => `(${v.map((x) => fmt(x, decimals)).join(', ')})`;
 
@@ -26,12 +27,13 @@ function xform(pose: Pose, scale = 1, indent = '    '): string {
 /** PhysX simulates a triangle mesh only when it stands still; a free body collides as its convex hull, or as its box when asked. */
 type Approximation = 'none' | 'convexHull' | 'boundingCube';
 
-function meshPrim(name: string, data: MeshData, collision: Approximation | null, indent: string): string {
+function meshPrim(name: string, data: MeshData, collision: Approximation | null, indent: string, extra: { schemas?: string[]; lines?: string[]; children?: string[] } = {}): string {
   const points: string[] = [];
   for (let i = 0; i < data.positions.length; i += 3) points.push(tuple([data.positions[i], data.positions[i + 1], data.positions[i + 2]]));
   const counts = new Array(data.indices.length / 3).fill('3').join(', ');
+  const schemas = [...(collision ? ['PhysicsCollisionAPI', 'PhysicsMeshCollisionAPI'] : []), ...(extra.schemas ?? [])];
   const lines = [
-    `${indent}def Mesh "${name}"${collision ? ' (\n' + indent + '    prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"]\n' + indent + ')' : ''}`,
+    `${indent}def Mesh "${name}"${schemas.length ? ' (\n' + indent + `    prepend apiSchemas = [${schemas.map((s) => `"${s}"`).join(', ')}]\n` + indent + ')' : ''}`,
     `${indent}{`,
     `${indent}    int[] faceVertexCounts = [${counts}]`,
     `${indent}    int[] faceVertexIndices = [${Array.from(data.indices).join(', ')}]`,
@@ -44,8 +46,76 @@ function meshPrim(name: string, data: MeshData, collision: Approximation | null,
     lines.push(`${indent}    color3f[] primvars:displayColor = [${colors.join(', ')}] (\n${indent}        interpolation = "vertex"\n${indent}    )`);
   }
   if (collision) lines.push(`${indent}    uniform token physics:approximation = "${collision}"`);
+  lines.push(...(extra.lines ?? []).map((l) => `${indent}    ${l}`));
+  if (extra.children?.length) lines.push('', ...extra.children);
   lines.push(`${indent}}`);
   return lines.join('\n');
+}
+
+/** A physics material: what PhysX reads as friction and restitution; the colour is for the eye. */
+function materialPrim(name: string, friction: number, restitution: number, color: Vec3 | null, indent: string): string {
+  return [
+    `${indent}def Material "${name}" (`,
+    `${indent}    prepend apiSchemas = ["PhysicsMaterialAPI", "PhysxMaterialAPI"]`,
+    `${indent})`,
+    `${indent}{`,
+    `${indent}    float physics:dynamicFriction = ${fmt(friction, 4)}`,
+    `${indent}    float physics:staticFriction = ${fmt(friction, 4)}`,
+    `${indent}    float physics:restitution = ${fmt(restitution, 4)}`,
+    `${indent}    uniform token physxMaterial:frictionCombineMode = "min"`,
+    ...(color ? [`${indent}    color3f[] primvars:displayColor = [${tuple(color, 4)}]`] : []),
+    `${indent}}`,
+  ].join('\n');
+}
+
+/**
+ * The ground with its surfaces: its own material bound for physics, and a
+ * zone as a static mesh patch of the ground's cells laid a hair over it,
+ * bound to the zone's material, as Gazebo gets it. (A GeomSubset of the
+ * ground's faces with a physics material of its own is what USD provides
+ * for this, and PhysX in Isaac Sim 6.2 crashed on the first play of such a
+ * stage, so the patch it is.) On a plane each zone is a thin cube instead.
+ */
+function groundPrims(world: World): string[] {
+  const t = world.terrain;
+  const zones = placedZones(world);
+  const materials = [materialPrim('Ground', t.friction, 0, null, '        '), ...world.materials.map((m) => materialPrim(identifier(m.name, 'material') + '_' + m.id, m.friction, m.restitution, m.color, '        '))];
+  const materialPath = (id: string) => `/World/PhysicsMaterials/${identifier(world.materials.find((m) => m.id === id)!.name, 'material')}_${id}`;
+  const patches: string[] = [];
+  const cubes: string[] = [];
+  zones.forEach(({ zone, material, rect }, index) => {
+    const name = identifier(zone.name || `zone_${index + 1}`, 'zone');
+    if (t.kind === 'heightmap') {
+      const data = zoneMesh(t, zone);
+      if (!data) return;
+      const coloured: MeshData = { ...data, colors: Float32Array.from({ length: data.positions.length }, (_, i) => material.color[i % 3]) };
+      patches.push([`    def Xform "${name}"`, '    {', meshPrim('mesh', coloured, 'none', '        ', { schemas: ['MaterialBindingAPI'], lines: [`rel material:binding:physics = <${materialPath(material.id)}>`] }), '    }'].join('\n'));
+    } else {
+      const [x0, y0, x1, y1] = rect;
+      cubes.push(
+        [
+          `    def Cube "${name}" (`,
+          '        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]',
+          '    )',
+          '    {',
+          '        double size = 1',
+          `        double3 xformOp:translate = ${tuple([(x0 + x1) / 2, (y0 + y1) / 2, ZONE_LIFT])}`,
+          `        double3 xformOp:scale = ${tuple([x1 - x0, y1 - y0, ZONE_LIFT * 2])}`,
+          '        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+          `        rel material:binding:physics = <${materialPath(material.id)}>`,
+          `        color3f[] primvars:displayColor = [${tuple(material.color, 4)}]`,
+          '    }',
+        ].join('\n'),
+      );
+    }
+  });
+  const ground = [
+    '    def Xform "Ground"',
+    '    {',
+    meshPrim('mesh', groundMesh(t), 'none', '        ', { schemas: ['MaterialBindingAPI'], lines: ['rel material:binding:physics = </World/PhysicsMaterials/Ground>'] }),
+    '    }',
+  ].join('\n');
+  return [`    def Scope "PhysicsMaterials"\n    {\n${materials.join('\n\n')}\n    }`, ground, ...patches, ...cubes];
 }
 
 /** The ground as a mesh: one quad for a plane, a grid for a heightmap. */
@@ -206,10 +276,7 @@ def Xform "World"
         float physics:gravityMagnitude = ${fmt(magnitude, 4)}
     }
 
-    def Xform "Ground"
-    {
-${meshPrim('mesh', groundMesh(world.terrain), 'none', '        ')}
-    }
+${groundPrims(world).join('\n\n')}
 
 ${world.lights.map(lightPrim).join('\n\n')}
 

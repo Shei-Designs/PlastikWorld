@@ -102,6 +102,20 @@ class Launched:
         return [l for l in lines if not any(n in l for n in noise)]
 
 
+def judge_slide(name, item, travel):
+    """A crate set on a surface zone of a slope: on ice it must have slid, on rubber it must have stayed put.
+    DART takes the higher of the two frictions that meet, so the fixture may say what Gazebo does instead."""
+    if item.get('slideGazebo', item['slide']) == 'must':
+        if travel < 0.15:
+            fail(name, f'{item["id"]} did not slide on the {item["surface"]}: it moved {travel:.3f} m')
+        else:
+            ok(f'{item["id"]} slid {travel:.2f} m on the {item["surface"]}')
+    elif travel > 0.05:
+        fail(name, f'{item["id"]} slid {travel:.3f} m on the {item["surface"]}, where it should have held')
+    else:
+        ok(f'{item["id"]} holds on the {item["surface"]} ({travel * 1000:.0f} mm)')
+
+
 def resting(z, ground, edge):
     """Whether a crate's origin (the middle of its base) sits on the ground, allowing for a slope and a tumble."""
     return ground - 0.05 - 0.25 * edge <= z <= ground + edge + 0.05
@@ -223,6 +237,9 @@ def check(smoke_path, env):
                         ok(f'{item["id"]} stays where it was placed')
                     continue
                 if item['collision'] == 'none':
+                    continue
+                if item.get('slide'):
+                    judge_slide(name, item, math.hypot(p1[0] - item['xyz'][0], p1[1] - item['xyz'][1]))
                     continue
                 if moved > 0.01:
                     fail(name, f'{item["id"]} is still moving {moved * 1000:.0f} mm/s after 13 s')

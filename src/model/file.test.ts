@@ -24,6 +24,8 @@ const sample = (): World => {
   w.objects.push({ id: 'o2', name: 'rover', asset: 'r1', pose: { xyz: [0, 0, 0.05], rpy: [0, 0, 0] }, scale: 1, physics: { static: false, mass: 1, friction: 0.8, collision: 'mesh' } });
   w.spawns.push({ id: 's1', name: 'Start', pose: { xyz: [0, 0, 0], rpy: [0, 0, 1] } });
   w.terrain = { kind: 'heightmap', size: [10, 8], friction: 0.9, rows: 65, cols: 65, heights: Float32Array.from({ length: 65 * 65 }, (_, i) => Math.sin(i) * 1.5) };
+  w.materials.push({ id: 'ice', name: 'Ice', friction: 0.05, restitution: 0.02, color: [0.75, 0.88, 0.95] });
+  w.zones.push({ id: 'z1', name: 'Rink', material: 'ice', rect: [-2, -2, 2, 1] });
   w.revision = 'rev00000000000001';
   w.saved = '2026-11-01T20:00:00.000Z';
   return w;
@@ -88,6 +90,10 @@ describe('world files', () => {
     expect(world.objects).toHaveLength(1);
     expect(world.objects[0].physics.collision).toBe('mesh');
     expect(world.objects[0].pose).toEqual({ xyz: [0, 0, 0], rpy: [0, 0, 0] });
+    // A zone whose material is missing is dropped with its rect left unread.
+    const zoned = parseWorld(encodeText(JSON.stringify({ format: 'plastikcad-world', version: 2, name: 'Z', materials: [{ id: 'm', name: 'Mud', friction: 0.3 }], zones: [{ id: 'a', material: 'm', rect: [3, 3, -1, 0] }, { id: 'b', material: 'gone', rect: [0, 0, 1, 1] }] })));
+    expect(zoned.zones).toEqual([{ id: 'a', name: 'Zone 1', material: 'm', rect: [-1, 0, 3, 3] }]);
+    expect(zoned.materials[0]).toMatchObject({ name: 'Mud', friction: 0.3, restitution: 0 });
     // A heights list of the wrong length is replaced by flat ground on an allowed grid.
     expect(world.terrain.kind === 'heightmap' && world.terrain.rows).toBe(65);
     expect(world.terrain.kind === 'heightmap' && world.terrain.heights.every((h) => h === 0)).toBe(true);

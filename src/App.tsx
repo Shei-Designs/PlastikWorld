@@ -80,7 +80,8 @@ function onKeyDown(e: KeyboardEvent): void {
     return;
   }
   // The brush size, while sculpting.
-  const brush = getState().tool?.brush;
+  const tool = getState().tool;
+  const brush = tool?.kind === 'sculpt' ? tool.brush : null;
   if (brush && (key === '[' || key === ']')) {
     e.preventDefault();
     setBrush({ radius: Math.min(50, Math.max(0.1, brush.radius * (key === ']' ? 1.25 : 0.8))) });

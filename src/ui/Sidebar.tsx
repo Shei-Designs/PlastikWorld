@@ -17,6 +17,7 @@ import {
   saveCopy,
   saveNow,
   select,
+  setTool,
   showAbout,
   showExport,
   startPlacing,
@@ -24,7 +25,7 @@ import {
   updateWorld,
   useEditor,
 } from '../state/store';
-import { CubeIcon, FlagIcon, ImportIcon, LightIcon, Logo, MenuIcon, MoonIcon, PlusIcon, RobotIcon, SunIcon, TerrainIcon, TrashIcon, WorldIcon } from './icons';
+import { CubeIcon, GridIcon, FlagIcon, ImportIcon, LightIcon, Logo, MenuIcon, MoonIcon, PlusIcon, RobotIcon, SunIcon, TerrainIcon, TrashIcon, WorldIcon } from './icons';
 import { Popover } from './Popover';
 
 const LIGHT_KINDS: { id: LightKind; label: string }[] = [
@@ -90,6 +91,7 @@ export function Sidebar() {
   const dirty = useEditor((s) => isDirty() && s.saved !== s.world);
   const theme = useEditor((s) => s.prefs.theme);
   const placing = useEditor((s) => s.placing);
+  const tool = useEditor((s) => s.tool);
   const assetsById = new Map(world.assets.map((a) => [a.id, a]));
   const on = (kind: 'world' | 'terrain') => pick?.kind === kind;
   const picked = (id: string) => selection.includes(id);
@@ -183,6 +185,22 @@ export function Sidebar() {
               <span className="clip">{s.name}</span>
             </button>
           ))}
+        </section>
+        <section>
+          <div className="section-head">
+            <span className="grow">Surfaces</span>
+            <button type="button" className={`icon-button${tool?.kind === 'zone' ? ' on' : ''}`} title="Draw a surface zone on the ground" aria-label="Draw a surface zone" onClick={() => setTool(tool?.kind === 'zone' ? null : { kind: 'zone' })}>
+              <PlusIcon />
+            </button>
+          </div>
+          {world.zones.map((z) => (
+            <button key={z.id} type="button" className={`tree-item${picked(z.id) ? ' on' : ''}`} onClick={(e) => select(z.id, e.shiftKey || e.ctrlKey)}>
+              <GridIcon />
+              <span className="clip">{z.name}</span>
+              <span className="meta">{world.materials.find((m) => m.id === z.material)?.name ?? '?'}</span>
+            </button>
+          ))}
+          {world.zones.length === 0 && <p className="tree-empty">The ground has one surface. Draw a zone to give part of it another.</p>}
         </section>
         <section>
           <div className="section-head">

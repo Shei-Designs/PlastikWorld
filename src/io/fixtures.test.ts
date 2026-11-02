@@ -167,7 +167,7 @@ const DRIVE = { speed: 0.4, wheelRate: 20, seconds: 4, mustMove: 1.0 };
  * with the way uphill clear too, so that driven forward for the test it
  * visibly climbs without having to clear a crate.
  */
-function slopeSpot(terrain: Terrain, taken: [number, number][]): [number, number] {
+function slopeSpot(terrain: Terrain, taken: [number, number][], downhillClear = 0, room = 1.5): [number, number] {
   const clear = (x: number, y: number, r: number) => taken.every(([tx, ty]) => Math.hypot(tx - x, ty - y) >= r);
   for (let x = -8; x <= 8; x += 0.5) {
     for (let y = -8; y <= 8; y += 0.5) {
@@ -178,7 +178,9 @@ function slopeSpot(terrain: Terrain, taken: [number, number][]): [number, number
       if (Math.abs(x + 3 * Math.cos(yaw)) > 9 || Math.abs(y + 3 * Math.sin(yaw)) > 9) continue;
       // A steady climb all the way: higher at every meter along the path.
       if (!(rise(1) < rise(2) && rise(2) < rise(3) && rise(3) > 0.15)) continue;
-      if (![0, 1, 2, 3].every((d) => clear(x + d * Math.cos(yaw), y + d * Math.sin(yaw), 1.5))) continue;
+      if (![0, 1, 2, 3].every((d) => clear(x + d * Math.cos(yaw), y + d * Math.sin(yaw), d === 0 ? room : 1.5))) continue;
+      // Something that will slide needs the way downhill clear too, and to stay on the terrain.
+      if (downhillClear > 0 && ![1, 2, 3, 4].every((d) => d > downhillClear || (clear(x - d * Math.cos(yaw), y - d * Math.sin(yaw), 1.5) && Math.abs(x - d * Math.cos(yaw)) < 10 && Math.abs(y - d * Math.sin(yaw)) < 10))) continue;
       return [x, y];
     }
   }
@@ -299,6 +301,28 @@ async function yards(): Promise<{ worlds: World[]; resolved: Resolved }> {
       world.objects.push({ id: `p_${rover.id}`, name: asset.name, asset: rover.id, pose: at(x, y, 0.05, yaw), scale: 1, physics: physics(true, 'mesh') });
       taken.push([x, y], [x + 1.5 * Math.cos(yaw + forwardOf(asset.format)), y + 1.5 * Math.sin(yaw + forwardOf(asset.format))], [x + 3 * Math.cos(yaw + forwardOf(asset.format)), y + 3 * Math.sin(yaw + forwardOf(asset.format))]);
     }
+    if (kind === 'heightmap') {
+      // Two surface zones on slopes, ice and rubber, with a half crate set down on each: the one on ice must
+      // slide, the one on rubber must hold, in every engine (how each combines two frictions was found this way).
+      world.materials.push({ id: 'ice', name: 'Ice', friction: 0.05, restitution: 0.02, color: [0.75, 0.88, 0.95] }, { id: 'rubber', name: 'Rubber', friction: 1.2, restitution: 0.3, color: [0.1, 0.1, 0.1] });
+      for (const [id, material] of [
+        ['ice', 'ice'],
+        ['rubber', 'rubber'],
+      ] as const) {
+        // A 3 m zone must not reach under a probe, which rocks on its edge: room for its half-width and the probe's.
+        const [x, y] = slopeSpot(world.terrain, taken, 4, 2.6);
+        world.zones.push({ id: `zone_${id}`, name: `${material[0].toUpperCase()}${material.slice(1)} patch`, material, rect: [x - 1.5, y - 1.5, x + 1.5, y + 1.5] });
+        world.objects.push({ id: `slider_${id}`, name: `Slider ${id}`, asset: 'crate', pose: at(x, y, 0.1), scale: 0.5, physics: physics(true, 'box', 1) });
+        if (id === 'ice') {
+          // A waxed crate beside it, across the slope, with a friction as low as the ice: Gazebo's DART takes the
+          // higher of the two frictions that meet, so there the plain crate holds and only this one slides.
+          const across = uphill(world.terrain, x, y) + Math.PI / 2;
+          const waxed = { ...physics(true, 'box', 1), friction: 0.05 };
+          world.objects.push({ id: 'slider_waxed', name: 'Slider waxed', asset: 'crate', pose: at(x + 0.9 * Math.cos(across), y + 0.9 * Math.sin(across), 0.1), scale: 0.5, physics: waxed });
+        }
+        taken.push([x, y], [x + 2, y], [x - 2, y], [x, y + 2], [x, y - 2]);
+      }
+    }
     world.spawns.push({ id: 's1', name: 'Start', pose: at(0, 0, 0) });
     worlds.push(world);
   }
@@ -318,7 +342,12 @@ function expectations(world: World, bundle: ExportBundle, mainFile: string): obj
     probes,
     objects: world.objects
       .filter((p) => world.assets.find((a) => a.id === p.asset)?.kind === 'mesh')
-      .map((p) => ({ id: identifier(p.name, 'prop'), name: p.name, free: !p.physics.static, collision: p.physics.collision, xyz: p.pose.xyz, ground: ground(p.pose.xyz[0], p.pose.xyz[1]), edge: CRATE * p.scale, probe: p.name.startsWith('Probe '), placed: !left(p) })),
+      .map((p) => {
+        const slider = /^Slider (\w+)$/.exec(p.name);
+        // On ice the crate must slide, except in Gazebo, where the crate's own friction (0.8) counts and it holds; the waxed crate slides everywhere.
+        const slide = slider ? (slider[1] === 'rubber' ? { slide: 'mustNot', surface: 'rubber' } : slider[1] === 'ice' ? { slide: 'must', surface: 'ice', slideGazebo: 'mustNot' } : { slide: 'must', surface: 'ice' }) : {};
+        return { id: identifier(p.name, 'prop'), name: p.name, free: !p.physics.static, collision: p.physics.collision, xyz: p.pose.xyz, ground: ground(p.pose.xyz[0], p.pose.xyz[1]), edge: CRATE * p.scale, probe: p.name.startsWith('Probe '), placed: !left(p), ...slide };
+      }),
     robots: world.objects
       .filter((p) => world.assets.find((a) => a.id === p.asset)?.kind === 'robot')
       .map((p) => {
@@ -365,7 +394,7 @@ describe('sample worlds', () => {
       const mujoco = mujocoBundle(world, resolved);
       const isaac = isaacBundle(world, resolved);
       // Each engine takes the props and the robots it can read, and says why it left the others out.
-      expect(gazebo.notes.filter((n) => !/MuJoCo model cannot/.test(n) && !/also named reference_rover/.test(n))).toEqual([]);
+      expect(gazebo.notes.filter((n) => !/MuJoCo model cannot/.test(n) && !/also named reference_rover/.test(n) && !/takes the higher friction/.test(n))).toEqual([]);
       for (const bundle of [gazebo, mujoco, isaac]) expect(bundle.notes.filter((n) => /^Gazebo may never settle/.test(n))).toEqual([]);
       expect(mujoco.notes.filter((n) => !/not a MuJoCo model/.test(n))).toEqual([]);
       expect(isaac.notes.filter((n) => !/no USD stage/.test(n))).toEqual([]);

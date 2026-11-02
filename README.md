@@ -110,6 +110,23 @@ Over a few kilometres the flat-earth error is well under a percent. Terrain
 is made here and never imported as a mesh: a bridge spans a valley as an
 object, a tunnel is an object in the ground.
 
+### Surfaces
+
+The ground has one friction, set on the terrain. For more, add surfaces in
+the world settings (asphalt, grass, ice, rubber and the rest, each with a
+friction, a bounce and a colour) and draw zones on the ground with the plus
+by **Surfaces** in the sidebar: a rectangle, dragged out in the viewport,
+painted in the surface's colour. Each engine gets the zone its own way:
+Gazebo and Isaac Sim get a static mesh patch of the zone's cells laid a
+little over the ground with the surface's friction (Isaac's friction rule set
+to take the lesser of the two surfaces that meet); MuJoCo gets a heightfield
+of the same cells, with priority so its friction counts. One engine differs:
+Gazebo's DART takes the higher of the two frictions that meet, so an ice zone
+slows a body there only when the body's own friction is as low, and the
+export says so. The smoke tests set crates on an ice zone and a rubber zone
+on the same hillside: on ice a plain crate slides in MuJoCo and Isaac and a
+waxed one slides in all three; on rubber every crate holds.
+
 ### Controls
 
 | | |
@@ -248,10 +265,10 @@ exports with a note in the other two, the way robot package clashes do now.
    ground as a triangle mesh); the user picks area and spacing and sees the
    sample count. Past 129 square the heights move to a 16-bit PNG beside the
    world file.
-3. **Surfaces.** A table of materials (friction, restitution, colour,
-   texture) and painted zones on the terrain, rectangular first because
-   MuJoCo heightfields are rectangles: Isaac binds a material per triangle,
-   Gazebo and MuJoCo get one ground collision per zone.
+3. **Surfaces.** Done: a table of materials (friction, restitution,
+   colour) and rectangular zones on the terrain, each a ground collision of
+   its own in every engine. Textures and
+   free-form zones later.
 4. **A parts library** of generic set pieces, indoor (walls, doors, floors,
    stairs, ramps, tables, shelves, pallets, boxes, cones) and outdoor
    (curbs, road segments, parking lines, lamp posts, fences, barriers,

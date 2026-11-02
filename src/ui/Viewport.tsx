@@ -3,10 +3,10 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { Light, World } from '../model/types';
 import { assetEpoch, loadedAsset, subscribeAssets } from '../state/assets';
 import { SNAP_STEPS } from '../state/persist';
-import { beginGesture, beginSculpt, cancelPlacing, deleteSelected, duplicateSelected, endGesture, endSculpt, moveBy, placeAt, provideThumbnail, redo, sculptAt, select, setPrefs, setTool, showPanel, undo, useEditor } from '../state/store';
+import { addZone, beginGesture, beginSculpt, cancelPlacing, deleteSelected, duplicateSelected, endGesture, endSculpt, moveBy, placeAt, provideThumbnail, redo, sculptAt, select, setPrefs, setTool, showPanel, undo, useEditor } from '../state/store';
 import { BRUSH_KINDS } from '../terrain/brush';
 import { GIZMO_SIZE, Viewer } from '../viewer/Viewer';
-import type { ViewItem, ViewPreset, Visual } from '../viewer/Viewer';
+import type { ViewItem, ViewPreset, ViewZone, Visual } from '../viewer/Viewer';
 import { CloseIcon, DuplicateIcon, FitIcon, GridIcon, MenuIcon, RedoIcon, SlidersIcon, TrashIcon, UndoIcon } from './icons';
 
 const VIEWS: { id: ViewPreset; label: string }[] = [
@@ -49,6 +49,7 @@ export function Viewport() {
   const canRedo = useEditor((s) => s.canRedo);
   const epoch = useSyncExternalStore(subscribeAssets, assetEpoch);
   const items = useMemo(() => itemsOf(world, selection, epoch), [world, selection, epoch]);
+  const zones = useMemo<ViewZone[]>(() => world.zones.map((zone) => ({ zone, color: world.materials.find((m) => m.id === zone.material)?.color ?? [0.5, 0.5, 0.5], selected: selection.includes(zone.id) })), [world.zones, world.materials, selection]);
 
   useEffect(() => {
     const v = new Viewer(
@@ -62,6 +63,7 @@ export function Viewport() {
         onSculptStart: (point) => beginSculpt(point, (window) => v.refreshHeights(window)),
         onSculpt: sculptAt,
         onSculptEnd: endSculpt,
+        onZone: addZone,
         onReadout: (text, x, y) => {
           const el = readout.current;
           if (!el) return;
@@ -86,10 +88,11 @@ export function Viewport() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => viewerRef.current?.setItems(items, world.terrain), [items, world.terrain]);
+  useEffect(() => viewerRef.current?.setItems(items, world.terrain, zones), [items, world.terrain, zones]);
   useEffect(() => viewerRef.current?.setOptions({ theme: prefs.theme, grid: prefs.grid, snap: prefs.snap }), [prefs.theme, prefs.grid, prefs.snap]);
   useEffect(() => viewerRef.current?.setPlacing(placing !== null), [placing]);
-  useEffect(() => viewerRef.current?.setSculpt(tool ? tool.brush.radius : null), [tool]);
+  useEffect(() => viewerRef.current?.setSculpt(tool?.kind === 'sculpt' ? tool.brush.radius : null), [tool]);
+  useEffect(() => viewerRef.current?.setZoneTool(tool?.kind === 'zone'), [tool]);
   // A terrain of another size (real elevation is kilometres across) would leave the camera where it was: refit.
   const [sizeX, sizeY] = world.terrain.size;
   useEffect(() => void viewerRef.current?.fit(), [sizeX, sizeY]);
@@ -131,7 +134,7 @@ export function Viewport() {
           <SlidersIcon />
         </button>
       </div>
-      {empty && !placing && (
+      {empty && !placing && !tool && (
         <div className="stage-empty">
           <strong>An empty world</strong>
           Import a GLB object or a robot package from PlastikCAD, then drag things into place. Right-drag turns the camera, middle-drag pans, the wheel zooms.
@@ -148,7 +151,7 @@ export function Viewport() {
       {tool && (
         <div className="stage-hint">
           <span>
-            {BRUSH_KINDS.find((b) => b.id === tool.brush.kind)?.hint}. Two fingers or the right button turn the camera; [ and ] change the brush size; Esc stops.
+            {tool.kind === 'sculpt' ? `${BRUSH_KINDS.find((b) => b.id === tool.brush.kind)?.hint}. Two fingers or the right button turn the camera; [ and ] change the brush size; Esc stops.` : 'Drag a rectangle on the ground to make a surface zone. Esc stops.'}
           </span>
           <button type="button" className="icon-button" aria-label="Stop sculpting" onClick={() => setTool(null)}>
             <CloseIcon />

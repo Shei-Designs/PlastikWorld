@@ -48,9 +48,23 @@ def ground_at(m, d, x, y):
     # Only the default geom group: the floor, not the probe crate hanging over the spot (its geoms are in groups 2 and 3).
     groups = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)
     dist = mujoco.mj_ray(m, d, np.array([x, y, 50.0]), np.array([0.0, 0.0, -1.0]), groups, 1, -1, geomid)
-    if dist < 0 or geomid[0] != mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, 'floor'):
+    # The floor, or a surface zone laid over it (a static geom of the world body, a hair above the ground).
+    if dist < 0 or m.geom_bodyid[geomid[0]] != 0:
         return None
     return 50.0 - dist
+
+
+def judge_slide(name, item, travel):
+    """A crate set on a surface zone of a slope: on ice it must have slid, on rubber it must have stayed put."""
+    if item['slide'] == 'must':
+        if travel < 0.15:
+            fail(name, f'{item["id"]} did not slide on the {item["surface"]}: it moved {travel:.3f} m')
+        else:
+            ok(f'{item["id"]} slid {travel:.2f} m on the {item["surface"]}')
+    elif travel > 0.05:
+        fail(name, f'{item["id"]} slid {travel:.3f} m on the {item["surface"]}, where it should have held')
+    else:
+        ok(f'{item["id"]} holds on the {item["surface"]} ({travel * 1000:.0f} mm)')
 
 
 def resting(z, ground, edge):
@@ -193,6 +207,9 @@ def check(smoke_path):
         if o['collision'] == 'none':
             continue
         moved = float(np.linalg.norm(d.xpos[b] - before[b]))
+        if o.get('slide'):
+            judge_slide(name, o, float(np.hypot(d.xpos[b][0] - o['xyz'][0], d.xpos[b][1] - o['xyz'][1])))
+            continue
         if moved > 0.01:
             fail(name, f'{o["id"]} is still moving {moved * 1000:.0f} mm/s after 4 s')
         elif o.get('probe'):

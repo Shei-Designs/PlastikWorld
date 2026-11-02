@@ -18,8 +18,8 @@ import { boxAround, copernicusTile, heightsFromDem, openDem, openDemUrl } from '
 import type { Dem, DemBox, DemFit, FetchLike } from '../terrain/elevation';
 import { parseWorld, parseWorldText, serializeWorld, serializeWorldText } from '../model/file';
 import { add, newId, uniqueName } from '../model/math';
-import { DEFAULT_PHYSICS, GRID_DEFAULT, assetPresent, emptyWorld } from '../model/types';
-import type { Asset, Light, LightKind, Pick, Placed, SpawnPoint, Terrain, Vec3, World } from '../model/types';
+import { DEFAULT_PHYSICS, GRID_DEFAULT, MATERIAL_PRESETS, assetPresent, emptyWorld } from '../model/types';
+import type { Asset, Light, LightKind, Material, Pick, Placed, SpawnPoint, Terrain, Vec3, World, Zone } from '../model/types';
 import * as platform from '../platform';
 import { inspectPackage } from '../robot/package';
 import type { PackageFiles } from '../robot/package';
@@ -40,8 +40,8 @@ export interface Notice {
 /** The thing the next click on the ground puts down. */
 export type Placing = { kind: 'asset'; asset: string } | { kind: 'light'; light: LightKind } | { kind: 'spawn' };
 
-/** A tool that takes the pointer on the ground: sculpting with a brush. */
-export type Tool = { kind: 'sculpt'; brush: Brush };
+/** A tool that takes the pointer on the ground: sculpting with a brush, or drawing a surface zone. */
+export type Tool = { kind: 'sculpt'; brush: Brush } | { kind: 'zone' };
 
 export interface EditorState {
   world: World;
@@ -179,7 +179,7 @@ function pickStill(world: World): Pick | null {
   return has(world, p.id) ? p : { kind: 'world' };
 }
 
-const names = (world: World): string[] => [...world.objects.map((o) => o.name), ...world.lights.map((l) => l.name), ...world.spawns.map((s) => s.name)];
+const names = (world: World): string[] => [...world.objects.map((o) => o.name), ...world.lights.map((l) => l.name), ...world.spawns.map((s) => s.name), ...world.zones.map((z) => z.name)];
 
 // --- selection -----------------------------------------------------------------
 
@@ -187,6 +187,7 @@ function pickOf(world: World, id: string): Pick | null {
   if (world.objects.some((o) => o.id === id)) return { kind: 'object', id };
   if (world.lights.some((l) => l.id === id)) return { kind: 'light', id };
   if (world.spawns.some((s) => s.id === id)) return { kind: 'spawn', id };
+  if (world.zones.some((z) => z.id === id)) return { kind: 'zone', id };
   return null;
 }
 
@@ -379,12 +380,12 @@ export function setTool(tool: Tool | null): void {
   set({ tool, placing: null, selection: tool ? [] : state.selection, pick: tool ? { kind: 'terrain' } : state.pick });
 }
 
-export const setBrush = (patch: Partial<Brush>): void => set({ tool: { kind: 'sculpt', brush: { ...(state.tool?.brush ?? DEFAULT_BRUSH), ...patch } } });
+export const setBrush = (patch: Partial<Brush>): void => set({ tool: { kind: 'sculpt', brush: { ...(state.tool?.kind === 'sculpt' ? state.tool.brush : DEFAULT_BRUSH), ...patch } } });
 
 /** A stroke begins at a point on the ground; `refresh` is the viewer's way to move the touched vertices. */
 export function beginSculpt(point: Vec3, refresh: (window: BrushWindow) => void): void {
   const t = state.world.terrain;
-  if (!state.tool || t.kind !== 'heightmap') return;
+  if (state.tool?.kind !== 'sculpt' || t.kind !== 'heightmap') return;
   if (stroke) endSculpt(true);
   const heights = t.heights.slice();
   stroke = { before: state.world, heights, level: point[2], refresh };
@@ -393,7 +394,7 @@ export function beginSculpt(point: Vec3, refresh: (window: BrushWindow) => void)
 
 export function sculptAt(point: Vec3, dt: number): void {
   const t = state.world.terrain;
-  if (!stroke || !state.tool || t.kind !== 'heightmap') return;
+  if (!stroke || state.tool?.kind !== 'sculpt' || t.kind !== 'heightmap') return;
   const window = dab(t, state.tool.brush, point[0], point[1], dt, stroke.level);
   if (window) stroke.refresh(window);
 }
@@ -534,7 +535,7 @@ export function updateWorld(patch: Partial<{ name: string; gravity: Vec3 }>): vo
 export function deleteSelected(): void {
   const ids = new Set(state.selection);
   if (ids.size === 0) return;
-  edit((w) => ({ ...w, objects: w.objects.filter((o) => !ids.has(o.id)), lights: w.lights.filter((l) => !ids.has(l.id)), spawns: w.spawns.filter((s) => !ids.has(s.id)) }), { selection: [], pick: { kind: 'world' } });
+  edit((w) => ({ ...w, objects: w.objects.filter((o) => !ids.has(o.id)), lights: w.lights.filter((l) => !ids.has(l.id)), spawns: w.spawns.filter((s) => !ids.has(s.id)), zones: w.zones.filter((z) => !ids.has(z.id)) }), { selection: [], pick: { kind: 'world' } });
 }
 
 /** Takes an asset out of the world, with everything placed from it. */
@@ -553,8 +554,9 @@ export function duplicateSelected(): void {
     const objects = w.objects.filter((o) => ids.has(o.id)).map((o) => ({ ...o, id: newId(), name: uniqueName(o.name, taken), pose: { ...o.pose, xyz: shift(o.pose.xyz) } }));
     const lights = w.lights.filter((l) => ids.has(l.id)).map((l) => ({ ...l, id: newId(), name: uniqueName(l.name, taken), pose: { ...l.pose, xyz: shift(l.pose.xyz) } }));
     const spawns = w.spawns.filter((s) => ids.has(s.id)).map((s) => ({ ...s, id: newId(), name: uniqueName(s.name, taken), pose: { ...s.pose, xyz: shift(s.pose.xyz) } }));
-    copies.push(...objects.map((o) => o.id), ...lights.map((l) => l.id), ...spawns.map((s) => s.id));
-    return { ...w, objects: [...w.objects, ...objects], lights: [...w.lights, ...lights], spawns: [...w.spawns, ...spawns] };
+    const zones = w.zones.filter((z) => ids.has(z.id)).map((z) => ({ ...z, id: newId(), name: uniqueName(z.name, taken), rect: [z.rect[0] + 0.5, z.rect[1], z.rect[2] + 0.5, z.rect[3]] as Zone['rect'] }));
+    copies.push(...objects.map((o) => o.id), ...lights.map((l) => l.id), ...spawns.map((s) => s.id), ...zones.map((z) => z.id));
+    return { ...w, objects: [...w.objects, ...objects], lights: [...w.lights, ...lights], spawns: [...w.spawns, ...spawns], zones: [...w.zones, ...zones] };
   });
   const last = copies[copies.length - 1];
   set({ selection: copies, pick: last ? pickOf(state.world, last) : state.pick });
@@ -574,7 +576,39 @@ function moveAll(w: World, ids: Set<string>, delta: Vec3, origins?: Map<string, 
     objects: w.objects.map((o) => (ids.has(o.id) ? { ...o, pose: { ...o.pose, xyz: at(o.id, o.pose.xyz) } } : o)),
     lights: w.lights.map((l) => (ids.has(l.id) ? { ...l, pose: { ...l.pose, xyz: at(l.id, l.pose.xyz) } } : l)),
     spawns: w.spawns.map((s) => (ids.has(s.id) ? { ...s, pose: { ...s.pose, xyz: at(s.id, s.pose.xyz) } } : s)),
+    zones: w.zones.map((z) => (ids.has(z.id) ? { ...z, rect: [z.rect[0] + delta[0], z.rect[1] + delta[1], z.rect[2] + delta[0], z.rect[3] + delta[1]] } : z)),
   };
+}
+
+// --- surfaces ----------------------------------------------------------------
+
+/** Adds a material from a preset (or a plain grey one) and returns its id. */
+export function addMaterial(preset: Omit<Material, 'id'> = MATERIAL_PRESETS[1]): string {
+  const id = newId();
+  edit((w) => ({ ...w, materials: [...w.materials, { ...preset, id, name: uniqueName(preset.name, new Set(w.materials.map((m) => m.name))) }] }));
+  return id;
+}
+
+export function updateMaterial(id: string, patch: Partial<Material>): void {
+  edit((w) => ({ ...w, materials: w.materials.map((m) => (m.id === id ? { ...m, ...patch, id } : m)) }));
+}
+
+/** Takes a material out; the zones that had it go with it. */
+export function removeMaterial(id: string): void {
+  edit((w) => ({ ...w, materials: w.materials.filter((m) => m.id !== id), zones: w.zones.filter((z) => z.material !== id) }), { selection: [], pick: { kind: 'world' } });
+}
+
+/** A zone drawn on the ground; it takes the first material, adding one when the world has none yet. */
+export function addZone(rect: Zone['rect']): void {
+  const [x0, y0, x1, y1] = [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])];
+  if (x1 - x0 < 0.05 || y1 - y0 < 0.05) return;
+  const material = state.world.materials[0]?.id ?? addMaterial();
+  const id = newId();
+  edit((w) => ({ ...w, zones: [...w.zones, { id, name: uniqueName('Zone', names(w)), material, rect: [x0, y0, x1, y1] }] }), { selection: [id], pick: { kind: 'zone', id }, tool: null });
+}
+
+export function updateZone(id: string, patch: Partial<Zone>): void {
+  edit((w) => ({ ...w, zones: w.zones.map((z) => (z.id === id ? { ...z, ...patch, id } : z)) }));
 }
 
 // --- drags from the viewer: one undo step per gesture --------------------------------

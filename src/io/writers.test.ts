@@ -91,6 +91,26 @@ describe('Gazebo', () => {
     expect(bundle.notes).toEqual([]);
   });
 
+  it('lays a surface zone over the ground as a static mesh patch with its own friction', () => {
+    const { world, resolved } = yard();
+    world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 5, cols: 5, heights: new Float32Array(25).fill(0.5) };
+    world.materials.push({ id: 'ice', name: 'Ice', friction: 0.05, restitution: 0.02, color: [0.75, 0.88, 0.95] });
+    world.zones.push({ id: 'z', name: 'Rink', material: 'ice', rect: [-2.5, -2.5, 2.5, 0] });
+    const bundle = gazeboBundle(world, resolved);
+    const sdf = text(bundle, 'Test_Yard.sdf');
+    expect(sdf).toContain('<model name="Rink">');
+    expect(sdf).toContain('<mesh><uri>meshes/Rink.obj</uri></mesh></geometry><surface><friction><ode><mu>0.05</mu>');
+    // The patch's cells, a hair over the ground.
+    const obj = text(bundle, 'meshes/Rink.obj');
+    expect(obj).toContain('v -2.5 -2.5 0.51');
+    expect(obj).not.toContain('v 5 ');
+    // The loose crate has friction 0.7: the ice would not slow it in DART, and the note says so.
+    expect(bundle.notes).toEqual([expect.stringMatching(/Rink: Gazebo takes the higher friction/)]);
+    // On a plane the zone is a thin box instead.
+    world.terrain = { kind: 'plane', size: [10, 10], friction: 1 };
+    expect(text(gazeboBundle(world, resolved), 'Test_Yard.sdf')).toContain('<box><size>5 2.5 0.02</size></box>');
+  });
+
   it('warns about a moving mesh on a heightmap', () => {
     const { world, resolved } = yard();
     world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 3, cols: 3, heights: new Float32Array(9).fill(0.5) };
@@ -124,7 +144,8 @@ describe('MuJoCo', () => {
     expect(xml).toContain('<model name="reference_rover" file="robots/reference_rover/reference_rover.xml"/>');
     expect(xml).toContain('<attach model="reference_rover" body="Body" prefix="Rover_"/>');
     expect(text(bundle, 'meshes/Crate.obj')).toMatch(/^# Crate/);
-    expect(text(bundle, 'meshes/Crate.obj')).toContain('f 1 2 3');
+    expect(text(bundle, 'meshes/Crate.obj')).toContain('vn 0 0 -1');
+    expect(text(bundle, 'meshes/Crate.obj')).toContain('f 1//1 2//2 3//3');
     expect(bundle.copies).toEqual([{ asset: 'rover', to: 'robots/reference_rover' }]);
   });
 
@@ -135,6 +156,18 @@ describe('MuJoCo', () => {
     // The rows go in +Y first, as MuJoCo reads them.
     expect(xml).toContain('<hfield name="terrain" nrow="2" ncol="2" size="3 2 0.3 0.02" elevation="0.150 0.075  0.000 0.300"/>');
     expect(xml).toContain('<geom name="floor" type="hfield" hfield="terrain" pos="0 0 0"');
+  });
+
+  it('lays a surface zone as an hfield of its own with priority over the crate it meets', () => {
+    const { world, resolved } = yard('mujoco');
+    world.terrain = { kind: 'heightmap', size: [8, 8], friction: 1, rows: 5, cols: 5, heights: Float32Array.from({ length: 25 }, (_, i) => (i % 5) * 0.1) };
+    world.materials.push({ id: 'ice', name: 'Ice', friction: 0.05, restitution: 0, color: [0.8, 0.9, 1] });
+    world.zones.push({ id: 'z', name: 'Rink', material: 'ice', rect: [0, 0, 4, 4] });
+    const xml = text(mujocoBundle(world, resolved), 'Test_Yard.xml');
+    // Columns 2..4 and rows 2..4 of the grid: 3 × 3 samples, 4 m across, lifted 2 mm over the lowest of them (0.2 m).
+    expect(xml).toContain('<hfield name="Rink" nrow="3" ncol="3" size="2 2 0.2 0.01" elevation="0.200 0.300 0.400  0.200 0.300 0.400  0.200 0.300 0.400"/>');
+    expect(xml).toContain('<geom name="Rink" type="hfield" hfield="Rink" pos="2 2 0.202"');
+    expect(xml).toContain('priority="1" friction="0.05 0.005 0.0001"');
   });
 
   it('keeps the heights where the file has them when MuJoCo stretches them to 0..1', () => {
@@ -195,6 +228,23 @@ describe('Isaac Sim', () => {
     world.terrain = { kind: 'heightmap', size: [2, 2], friction: 1, rows: 2, cols: 2, heights: new Float32Array([0, 0, 0, 1]) };
     const usda = text(isaacBundle(world, resolved), 'Test_Yard.usda');
     expect(usda).toContain('point3f[] points = [(-1, -1, 0), (1, -1, 0), (-1, 1, 0), (1, 1, 1)]');
+  });
+
+  it('binds a physics material to the ground and to a subset of its faces per zone', () => {
+    const { world, resolved } = yard();
+    world.terrain = { kind: 'heightmap', size: [4, 4], friction: 0.7, rows: 3, cols: 3, heights: new Float32Array(9) };
+    world.materials.push({ id: 'ice', name: 'Ice', friction: 0.05, restitution: 0.02, color: [0.75, 0.88, 0.95] });
+    world.zones.push({ id: 'z', name: 'Rink', material: 'ice', rect: [0, 0, 2, 2] });
+    const usda = text(isaacBundle(world, resolved), 'Test_Yard.usda');
+    expect(usda).toContain('def Material "Ground"');
+    expect(usda).toContain('float physics:dynamicFriction = 0.7');
+    expect(usda).toContain('def Material "Ice_ice"');
+    expect(usda).toContain('uniform token physxMaterial:frictionCombineMode = "min"');
+    expect(usda).toContain('rel material:binding:physics = </World/PhysicsMaterials/Ground>');
+    // The zone is a static mesh patch of the ground's cells, 2 mm up, bound to the zone's material.
+    expect(usda).toContain('def Xform "Rink"');
+    expect(usda).toContain('point3f[] points = [(0, 0, 0.002), (2, 0, 0.002), (0, 2, 0.002), (2, 2, 0.002)]');
+    expect(usda).toContain('rel material:binding:physics = </World/PhysicsMaterials/Ice_ice>');
   });
 
   it('says when a robot carries no USD', () => {

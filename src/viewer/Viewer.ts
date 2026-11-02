@@ -50,7 +50,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { heightAt } from '../io/heightmap';
 import { loadGlb, loadObj } from '../io/meshes';
 import { quatOf } from '../model/math';
-import type { LightKind, Pose, Terrain, Vec3 } from '../model/types';
+import type { LightKind, Pose, Terrain, Vec3, Zone } from '../model/types';
+import { zoneMesh } from '../io/zones';
 
 export type ViewPreset = 'iso' | 'top' | 'front' | 'side';
 
@@ -95,6 +96,15 @@ export interface ViewerEvents {
   onSculptStart(point: Vec3): void;
   onSculpt(point: Vec3, dt: number): void;
   onSculptEnd(canceled: boolean): void;
+  /** The zone tool: a rectangle dragged out on the ground, in the terrain's frame. */
+  onZone(rect: [number, number, number, number]): void;
+}
+
+/** A surface zone as the viewer paints it: the zone, its colour, and whether it is picked. */
+export interface ViewZone {
+  zone: Zone;
+  color: Vec3;
+  selected: boolean;
 }
 
 const DEFAULTS: ViewerOptions = { theme: 'dark', grid: true, snap: 0.05, interactive: true };
@@ -153,7 +163,8 @@ type Drag =
   | { mode: 'move'; id: string; plane: Plane; origin: Vector3; vertical: boolean }
   | { mode: 'pending-clear'; x: number; y: number; additive: boolean }
   | { mode: 'place' }
-  | { mode: 'sculpt'; last: number };
+  | { mode: 'sculpt'; last: number }
+  | { mode: 'zone'; from: Vector3; to: Vector3 };
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
 const easeInOut = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
@@ -295,6 +306,12 @@ export class Viewer {
   private gridStep = 0;
   private ground: Mesh<BufferGeometry, MeshStandardMaterial> | null = null;
   private terrain: Terrain | null = null;
+  private zones: ViewZone[] = [];
+  private zonesKey = '';
+  private zoneMeshes: Mesh<BufferGeometry, MeshBasicMaterial>[] = [];
+  /** The rectangle being dragged out with the zone tool. */
+  private zoneDraft: Mesh<BufferGeometry, MeshBasicMaterial> | null = null;
+  private zoneTool = false;
   private terrainKey = '';
 
   private triadScene!: Scene;
@@ -312,6 +329,7 @@ export class Viewer {
   /** The ring showing the brush on the ground. */
   private brushRing: Mesh<RingGeometry, MeshBasicMaterial> | null = null;
   private lastHeights: Float32Array | null = null;
+  private lastZoneHeights: Float32Array | null = null;
   private animation: Animation | null = null;
   private fallback: HTMLElement | null = null;
 
@@ -333,11 +351,73 @@ export class Viewer {
   }
 
   /** The world to draw. Cheap to call often: only what changed is touched. */
-  setItems(items: ViewItem[], terrain: Terrain): void {
+  setItems(items: ViewItem[], terrain: Terrain, zones: ViewZone[] = []): void {
     this.items = items;
     this.terrain = terrain;
+    this.zones = zones;
     if (!this.ok || this.disposed) return;
     this.sync();
+    this.syncZones();
+    this.requestRender();
+  }
+
+  /** The zone tool: a drag on the ground draws a rectangle. */
+  setZoneTool(on: boolean): void {
+    this.zoneTool = on;
+    if (!this.ok) return;
+    this.renderer.domElement.style.cursor = on ? 'crosshair' : this.sculpting !== null ? 'crosshair' : this.placing ? 'copy' : '';
+  }
+
+  /** The zones painted over the ground: a patch of its cells each, in the material's colour, redrawn when a zone or the heights change. */
+  private syncZones(): void {
+    const t = this.terrain;
+    const key = t ? this.zones.map((z) => `${z.zone.id}:${z.zone.rect.join(',')}:${z.color.join(',')}:${z.selected ? 1 : 0}`).join('|') + `#${this.terrainKey}` : '';
+    const heightsChanged = t?.kind === 'heightmap' && t.heights !== this.lastZoneHeights;
+    if (key === this.zonesKey && !heightsChanged) return;
+    this.zonesKey = key;
+    this.lastZoneHeights = t?.kind === 'heightmap' ? t.heights : null;
+    for (const m of this.zoneMeshes) {
+      this.scene.remove(m);
+      m.geometry.dispose();
+      m.material.dispose();
+    }
+    this.zoneMeshes = [];
+    if (!t) return;
+    for (const { zone, color, selected } of this.zones) {
+      const data = zoneMesh(t, zone, 0.03);
+      if (!data) continue;
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(data.positions, 3));
+      geometry.setIndex(new BufferAttribute(data.indices, 1));
+      const material = new MeshBasicMaterial({ color: new Color(color[0], color[1], color[2]), transparent: true, opacity: selected ? 0.75 : 0.5, side: DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+      const mesh = new Mesh(geometry, material);
+      mesh.renderOrder = 1;
+      this.scene.add(mesh);
+      this.zoneMeshes.push(mesh);
+    }
+  }
+
+  /** The rectangle the zone tool is dragging out, flat at the ground's height under its corners. */
+  private drawZoneDraft(from: Vector3, to: Vector3): void {
+    if (!this.zoneDraft) {
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(new Float32Array(12), 3));
+      geometry.setIndex([0, 1, 2, 0, 2, 3]);
+      this.zoneDraft = new Mesh(geometry, new MeshBasicMaterial({ color: THEMES[this.options.theme].accent, transparent: true, opacity: 0.35, side: DoubleSide, depthTest: false }));
+      this.zoneDraft.renderOrder = 11;
+      this.scene.add(this.zoneDraft);
+      this.disposables.push(this.zoneDraft.geometry, this.zoneDraft.material);
+    }
+    const t = this.terrain;
+    const z = (x: number, y: number) => (t ? heightAt(t, x, y) : 0) + 0.05;
+    const x0 = Math.min(from.x, to.x), x1 = Math.max(from.x, to.x), y0 = Math.min(from.y, to.y), y1 = Math.max(from.y, to.y);
+    const pos = this.zoneDraft.geometry.getAttribute('position') as BufferAttribute;
+    pos.setXYZ(0, x0, y0, z(x0, y0));
+    pos.setXYZ(1, x1, y0, z(x1, y0));
+    pos.setXYZ(2, x1, y1, z(x1, y1));
+    pos.setXYZ(3, x0, y1, z(x0, y1));
+    pos.needsUpdate = true;
+    this.zoneDraft.visible = true;
     this.requestRender();
   }
 
@@ -410,7 +490,7 @@ export class Viewer {
   fit(immediate = false): void {
     if (!this.ok || this.disposed) return;
     const picked = this.items.filter((i) => i.selected);
-    const { center, radius } = this.extent(picked.length ? picked : this.items);
+    const { center, radius } = picked.length ? this.extent(picked) : this.extent(this.items, true);
     const pose = this.currentPose();
     pose.distance = this.fitDistance(radius);
     pose.target.copy(center);
@@ -432,7 +512,9 @@ export class Viewer {
     this.events.onReadout(null, 0, 0);
     if (drag.mode === 'move') this.events.onGestureEnd(true);
     if (drag.mode === 'sculpt') this.events.onSculptEnd(true);
+    if (drag.mode === 'zone' && this.zoneDraft) this.zoneDraft.visible = false;
     this.controls.enabled = true;
+    this.requestRender();
     return true;
   }
 
@@ -749,7 +831,7 @@ export class Viewer {
     this.scene.add(this.ground);
   }
 
-  private extent(items: ViewItem[]): { center: Vector3; radius: number; reach: [number, number] } {
+  private extent(items: ViewItem[], withGround = false): { center: Vector3; radius: number; reach: [number, number] } {
     const box = new Box3();
     for (const item of items) {
       const d = this.drawn.get(item.id);
@@ -760,6 +842,20 @@ export class Viewer {
     }
     const terrain = this.terrain;
     const reach: [number, number] = [terrain ? terrain.size[0] / 2 : 0, terrain ? terrain.size[1] / 2 : 0];
+    if (terrain && withGround) {
+      // The ground is part of the world to fit, or a world of one light would be looked at from the light.
+      let lo = 0, hi = 0;
+      if (terrain.kind === 'heightmap') {
+        lo = Infinity;
+        hi = -Infinity;
+        for (const h of terrain.heights) {
+          if (h < lo) lo = h;
+          if (h > hi) hi = h;
+        }
+      }
+      box.expandByPoint(new Vector3(-reach[0], -reach[1], lo));
+      box.expandByPoint(new Vector3(reach[0], reach[1], hi));
+    }
     if (box.isEmpty()) {
       if (terrain) return { center: new Vector3(0, 0, 0), radius: Math.max(Math.hypot(...terrain.size) / 2, 1), reach };
       return { center: new Vector3(0, 0, 0), radius: EMPTY_RADIUS, reach };
@@ -873,6 +969,15 @@ export class Viewer {
       claim();
       return;
     }
+    if (this.zoneTool) {
+      const point = this.groundPoint();
+      if (!point) return;
+      claim();
+      this.controls.enabled = false;
+      this.drag = { mode: 'zone', from: point.clone(), to: point.clone() };
+      this.drawZoneDraft(point, point);
+      return;
+    }
     if (this.sculpting !== null) {
       // One finger or the left button sculpts; the camera keeps the other buttons and a second finger.
       const point = this.groundPoint();
@@ -927,6 +1032,14 @@ export class Viewer {
       case 'place':
       case 'pending-clear':
         return;
+      case 'zone': {
+        const point = this.groundPoint();
+        if (!point) return;
+        drag.to.copy(point);
+        this.drawZoneDraft(drag.from, drag.to);
+        this.events.onReadout(`${Math.abs(drag.to.x - drag.from.x).toFixed(2)} × ${Math.abs(drag.to.y - drag.from.y).toFixed(2)} m`, event.clientX, event.clientY);
+        return;
+      }
       case 'sculpt': {
         const point = this.groundPoint();
         const dt = Math.min(0.1, (event.timeStamp - drag.last) / 1000);
@@ -997,6 +1110,11 @@ export class Viewer {
         return;
       case 'sculpt':
         this.events.onSculptEnd(event.type === 'pointercancel');
+        return;
+      case 'zone':
+        if (this.zoneDraft) this.zoneDraft.visible = false;
+        if (event.type === 'pointerup') this.events.onZone([this.snap(drag.from.x), this.snap(drag.from.y), this.snap(drag.to.x), this.snap(drag.to.y)]);
+        this.requestRender();
     }
   };
 

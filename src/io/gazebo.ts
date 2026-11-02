@@ -9,13 +9,66 @@ import { encodeGreyPng } from './png';
 import { bundleName, claimFolder, escapeXml, fmt, vec } from './export';
 import type { ExportBundle, ExportFile, Resolved } from './export';
 import { identifier } from './format';
+import { writeObj } from './obj';
+import { placedZones, zoneMesh } from './zones';
+
+/**
+ * How far a zone sits over the ground in Gazebo: a centimetre, not the
+ * writers' usual two millimetres, since with less DART still finds the
+ * heightmap under a body on the patch and takes the ground's friction (the
+ * crate on the ice zone held fast in the smoke test at 2 mm).
+ */
+const GAZEBO_ZONE_LIFT = 0.01;
 import { assetOf, assetPresent } from '../model/types';
 import type { Light, Placed, Pose, RobotAsset, World } from '../model/types';
 
 const poseXml = (pose: Pose): string => `<pose>${vec(pose.xyz)} ${vec(pose.rpy)}</pose>`;
 
-export function surfaceXml(friction: number): string {
-  return `<surface><friction><ode><mu>${fmt(friction, 4)}</mu><mu2>${fmt(friction, 4)}</mu2></ode></friction></surface>`;
+export function surfaceXml(friction: number, restitution = 0): string {
+  const bounce = restitution > 0 ? `<bounce><restitution_coefficient>${fmt(restitution, 4)}</restitution_coefficient><threshold>0.01</threshold></bounce>` : '';
+  return `<surface><friction><ode><mu>${fmt(friction, 4)}</mu><mu2>${fmt(friction, 4)}</mu2></ode></friction>${bounce}</surface>`;
+}
+
+/**
+ * A surface zone as a static model laid over the ground: on a heightmap a
+ * mesh of the zone's cells (an OBJ beside the world), on a plane a thin box,
+ * either a hair above the ground so a body lands on the zone's surface, with
+ * the material's friction. Gazebo has one surface per collision, which is why
+ * the zone is a collision of its own.
+ */
+function zoneXml(world: World, index: number, files: ExportFile[]): string | null {
+  const { zone, material, rect } = placedZones(world)[index];
+  const name = identifier(zone.name || `zone_${index + 1}`, 'zone');
+  const colour = `<material><ambient>${vec(material.color, 3)} 1</ambient><diffuse>${vec(material.color, 3)} 1</diffuse></material>`;
+  let geometry: string;
+  if (world.terrain.kind === 'plane') {
+    const [x0, y0, x1, y1] = rect;
+    geometry = `<box><size>${fmt(x1 - x0, 4)} ${fmt(y1 - y0, 4)} ${fmt(GAZEBO_ZONE_LIFT * 2, 4)}</size></box>`;
+    return [
+      `    <model name="${escapeXml(name)}">`,
+      '      <static>true</static>',
+      `      <pose>${fmt((x0 + x1) / 2, 4)} ${fmt((y0 + y1) / 2, 4)} ${fmt(GAZEBO_ZONE_LIFT, 4)} 0 0 0</pose>`,
+      '      <link name="link">',
+      `        <collision name="collision"><geometry>${geometry}</geometry>${surfaceXml(material.friction, material.restitution)}</collision>`,
+      `        <visual name="visual"><geometry>${geometry}</geometry>${colour}</visual>`,
+      '      </link>',
+      '    </model>',
+    ].join('\n');
+  }
+  const mesh = zoneMesh(world.terrain, zone, GAZEBO_ZONE_LIFT);
+  if (!mesh) return null;
+  const file = `meshes/${name}.obj`;
+  files.push({ path: file, text: writeObj(zone.name || name, mesh) });
+  geometry = `<mesh><uri>${file}</uri></mesh>`;
+  return [
+    `    <model name="${escapeXml(name)}">`,
+    '      <static>true</static>',
+    '      <link name="link">',
+    `        <collision name="collision"><geometry>${geometry}</geometry>${surfaceXml(material.friction, material.restitution)}</collision>`,
+    `        <visual name="visual"><geometry>${geometry}</geometry>${colour}</visual>`,
+    '      </link>',
+    '    </model>',
+  ].join('\n');
 }
 
 function lightXml(light: Light): string {
@@ -191,6 +244,15 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
     files.push({ path: heightmapFile, bytes: encodeGreyPng(n, n, flipped) });
   }
   const props: string[] = [];
+  const zones = placedZones(world);
+  for (let i = 0; i < zones.length; i++) {
+    const xml = zoneXml(world, i, files);
+    if (xml) props.push(xml);
+  }
+  // DART, Gazebo's physics, takes the higher of the two frictions that meet (found with a crate on an ice zone:
+  // it held fast until its own friction came down), so a slippery zone acts only on bodies as slippery.
+  const slippery = zones.filter(({ material }) => world.objects.some((o) => !o.physics.static && o.physics.friction > material.friction + 1e-6));
+  for (const { zone, material } of slippery) notes.push(`${zone.name}: Gazebo takes the higher friction of the two surfaces that meet, so its ${material.friction} only acts on bodies with a friction that low; set the object's friction too.`);
   const robots: { placed: Placed; asset: RobotAsset; folder: string }[] = [];
   const includes: string[] = [];
   const written = new Set<string>();

@@ -47,3 +47,7 @@ coverage/
 src-tauri/plugins/*/android/build
 src-tauri/plugins/*/android/.gradle
 src-tauri/plugins/*/android/.tauri
+
+# Python's bytecode cache beside the smoke scripts in tools/
+__pycache__/
+*.pyc

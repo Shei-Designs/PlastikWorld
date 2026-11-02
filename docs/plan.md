@@ -183,6 +183,15 @@ Files app.
 
 ## Phase 6. Surfaces (M)
 
+**Done 2026-11-02** with the patch approach in all three: a mesh patch
+(Gazebo, Isaac) or an hfield (MuJoCo) two millimetres over the ground per
+zone. A GeomSubset with a physics material of its own, USD's way, crashed
+PhysX in Isaac Sim 6.2 on the first play, so Isaac gets the patch too. Gazebo's DART takes the higher of the two
+frictions that meet (a crate held on ice until its own friction came down),
+which the Gazebo writer notes; MuJoCo and PhysX let the zone win. Found on the way: MuJoCo takes the larger
+friction of two geoms unless one has `priority`, and PhysX averages them
+unless a material asks for `min`; both are authored by the writers.
+
 - The world gains `materials` (name, friction, restitution, colour,
   texture) and the terrain gains `zones` (a rectangle in terrain
   coordinates and a material); the terrain itself keeps a base material.

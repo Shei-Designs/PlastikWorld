@@ -9,6 +9,7 @@ import { bundleName, claimFolder, escapeXml, fmt, vec } from './export';
 import type { ExportBundle, ExportFile, Resolved } from './export';
 import { identifier } from './format';
 import { range } from './heightmap';
+import { ZONE_LIFT, placedZones, zoneCells } from './zones';
 import { writeObj } from './obj';
 
 const TIMESTEP = 0.002;
@@ -48,6 +49,33 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
   } else {
     bodies.push(`    <geom name="floor" type="plane" size="${fmt(half[0], 4)} ${fmt(half[1], 4)} 0.1" material="floor" ${frictionAttr(t.friction)}/>`);
   }
+  // Surface zones: MuJoCo has one friction per geom, so each zone is a geom laid a hair over the ground.
+  placedZones(world).forEach(({ zone, material, rect }, index) => {
+    const zoneName = identifier(zone.name || `zone_${index + 1}`, 'zone');
+    const rgba = `${vec(material.color, 3)} 0.9`;
+    if (t.kind === 'plane') {
+      const [x0, y0, x1, y1] = rect;
+      // priority: MuJoCo takes the friction of the geom with the higher priority (the larger of the two otherwise), so the zone's surface counts.
+      bodies.push(`    <geom name="${zoneName}" type="box" pos="${fmt((x0 + x1) / 2, 4)} ${fmt((y0 + y1) / 2, 4)} ${fmt(ZONE_LIFT, 4)}" size="${fmt((x1 - x0) / 2, 4)} ${fmt((y1 - y0) / 2, 4)} ${fmt(ZONE_LIFT, 4)}" rgba="${rgba}" priority="1" ${frictionAttr(material.friction)}/>`);
+      return;
+    }
+    const cells = zoneCells(t, zone);
+    if (!cells) return;
+    const w = cells.c1 - cells.c0 + 1, h = cells.r1 - cells.r0 + 1;
+    const sx = t.size[0] / (t.cols - 1), sy = t.size[1] / (t.rows - 1);
+    let lo = Infinity, hi = -Infinity;
+    for (let r = cells.r0; r <= cells.r1; r++) for (let c = cells.c0; c <= cells.c1; c++) {
+      const v = t.heights[r * t.cols + c];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    const span = Math.max(hi - lo, 1e-3);
+    const rows: string[] = [];
+    for (let r = cells.r1; r >= cells.r0; r--) rows.push(Array.from(t.heights.subarray(r * t.cols + cells.c0, r * t.cols + cells.c1 + 1), (v) => v.toFixed(3)).join(' '));
+    const cx = ((cells.c0 + cells.c1) / 2 / (t.cols - 1) - 0.5) * t.size[0], cy = ((cells.r0 + cells.r1) / 2 / (t.rows - 1) - 0.5) * t.size[1];
+    assets.push(`    <hfield name="${zoneName}" nrow="${h}" ncol="${w}" size="${fmt((sx * (w - 1)) / 2, 4)} ${fmt((sy * (h - 1)) / 2, 4)} ${fmt(span, 4)} 0.01" elevation="${rows.join('  ')}"/>`);
+    bodies.push(`    <geom name="${zoneName}" type="hfield" hfield="${zoneName}" pos="${fmt(cx, 4)} ${fmt(cy, 4)} ${fmt(lo + ZONE_LIFT, 4)}" rgba="${rgba}" priority="1" ${frictionAttr(material.friction)}/>`);
+  });
   const written = new Map<string, string>();
   for (const placed of world.objects) {
     const asset = assetOf(world, placed);

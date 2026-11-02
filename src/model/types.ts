@@ -138,6 +138,44 @@ export interface Light {
   cone: number;
 }
 
+/** A surface the ground can have: what the engines read as friction and restitution, and the colour it is painted in the viewport. */
+export interface Material {
+  id: string;
+  name: string;
+  /** Coulomb friction. */
+  friction: number;
+  /** Bounciness, 0..1. */
+  restitution: number;
+  /** Linear RGB, 0..1. */
+  color: Vec3;
+}
+
+/** Ready-made surfaces, to add to a world. */
+export const MATERIAL_PRESETS: Omit<Material, 'id'>[] = [
+  { name: 'Asphalt', friction: 0.9, restitution: 0.1, color: [0.22, 0.22, 0.24] },
+  { name: 'Concrete', friction: 0.8, restitution: 0.1, color: [0.62, 0.62, 0.6] },
+  { name: 'Grass', friction: 0.6, restitution: 0.05, color: [0.25, 0.5, 0.18] },
+  { name: 'Gravel', friction: 0.7, restitution: 0.05, color: [0.5, 0.46, 0.4] },
+  { name: 'Sand', friction: 0.5, restitution: 0.02, color: [0.78, 0.68, 0.45] },
+  { name: 'Mud', friction: 0.3, restitution: 0, color: [0.35, 0.25, 0.15] },
+  { name: 'Ice', friction: 0.05, restitution: 0.02, color: [0.75, 0.88, 0.95] },
+  { name: 'Rubber', friction: 1.2, restitution: 0.3, color: [0.1, 0.1, 0.1] },
+];
+
+/**
+ * A patch of the ground with a surface of its own: a rectangle in the
+ * terrain's frame, meters, [x0, y0, x1, y1]. Rectangles first, since a
+ * MuJoCo heightfield is one; Isaac binds the material to the faces inside,
+ * Gazebo and MuJoCo get a collision piece per zone laid over the ground.
+ */
+export interface Zone {
+  id: string;
+  name: string;
+  /** The material's id in `World.materials`. */
+  material: string;
+  rect: [number, number, number, number];
+}
+
 /** A named pose: where a robot may be started from a launch file, or a goal for a navigation task. */
 export interface SpawnPoint {
   id: string;
@@ -155,6 +193,9 @@ export interface World {
   objects: Placed[];
   lights: Light[];
   spawns: SpawnPoint[];
+  /** The surfaces the ground can have, and where it has them. */
+  materials: Material[];
+  zones: Zone[];
   /** Stamped on each save, so that two devices can tell whether the other changed the world since they last agreed. */
   revision?: string;
   /** The revision this one followed. */
@@ -168,7 +209,7 @@ export interface World {
 }
 
 /** Any of the things the sidebar lists and the inspector edits. */
-export type Pick = { kind: 'object'; id: string } | { kind: 'light'; id: string } | { kind: 'spawn'; id: string } | { kind: 'terrain' } | { kind: 'world' };
+export type Pick = { kind: 'object'; id: string } | { kind: 'light'; id: string } | { kind: 'spawn'; id: string } | { kind: 'zone'; id: string } | { kind: 'terrain' } | { kind: 'world' };
 
 export function emptyWorld(name = 'Untitled'): World {
   return {
@@ -192,7 +233,11 @@ export function emptyWorld(name = 'Untitled'): World {
       },
     ],
     spawns: [],
+    materials: [],
+    zones: [],
   };
 }
+
+export const materialOf = (world: World, zone: Zone): Material | undefined => world.materials.find((m) => m.id === zone.material);
 
 export const assetOf = (world: World, placed: Placed): Asset | undefined => world.assets.find((a) => a.id === placed.asset);

@@ -13,7 +13,7 @@ import { decodeText, encodeText } from '../io/format';
 import { resample } from '../io/heightmap';
 import { newId } from './math';
 import { DEFAULT_PHYSICS, emptyWorld, GRID_SIZES, IDENTITY_POSE, snapGridSize } from './types';
-import type { Asset, Light, Placed, Pose, SpawnPoint, Terrain, Vec3, World } from './types';
+import type { Asset, Light, Material, Placed, Pose, SpawnPoint, Terrain, Vec3, World, Zone } from './types';
 
 /** Longest thumbnail written into a file. */
 export const MAX_THUMB = 200_000;
@@ -62,6 +62,8 @@ export function serializeWorldText(world: World): string {
     objects: world.objects,
     lights: world.lights,
     spawns: world.spawns,
+    materials: world.materials,
+    zones: world.zones,
     assets: world.assets.map(assetJson),
   };
   return pretty(file, 0) + '\n';
@@ -148,6 +150,19 @@ function light(raw: Record<string, unknown>, index: number): Light | null {
   };
 }
 
+function material(raw: Record<string, unknown>, index: number): Material | null {
+  const id = str(raw.id, '');
+  return id ? { id, name: str(raw.name, `Material ${index + 1}`), friction: Math.max(num(raw.friction, 0.8), 0), restitution: Math.min(Math.max(num(raw.restitution, 0), 0), 1), color: vec3(raw.color, [0.5, 0.5, 0.5]) } : null;
+}
+
+function zone(raw: Record<string, unknown>, index: number, materials: Set<string>): Zone | null {
+  const id = str(raw.id, '');
+  const rect = Array.isArray(raw.rect) && raw.rect.length === 4 && raw.rect.every((v) => typeof v === 'number' && Number.isFinite(v)) ? (raw.rect as number[]) : null;
+  const materialId = str(raw.material, '');
+  if (!id || !rect || !materials.has(materialId)) return null;
+  return { id, name: str(raw.name, `Zone ${index + 1}`), material: materialId, rect: [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])] };
+}
+
 function spawn(raw: Record<string, unknown>, index: number): SpawnPoint | null {
   const id = str(raw.id, '');
   return id ? { id, name: str(raw.name, `Spawn ${index + 1}`), pose: pose(raw.pose) } : null;
@@ -200,6 +215,8 @@ export function parseWorldText(text: string): World {
   const assets = list(raw.assets).map(asset).filter((a): a is Asset => a !== null);
   const ids = new Set(assets.map((a) => a.id));
   const lights = list(raw.lights).map(light).filter((l): l is Light => l !== null);
+  const materials = list(raw.materials).map(material).filter((m): m is Material => m !== null);
+  const materialIds = new Set(materials.map((m) => m.id));
   const world: World = {
     id: readId(file.id) ?? base.id,
     name: base.name,
@@ -211,6 +228,10 @@ export function parseWorldText(text: string): World {
       .filter((o): o is Placed => o !== null),
     lights: raw.lights === undefined ? base.lights : lights,
     spawns: list(raw.spawns).map(spawn).filter((s): s is SpawnPoint => s !== null),
+    materials,
+    zones: list(raw.zones)
+      .map((z, i) => zone(z, i, materialIds))
+      .filter((z): z is Zone => z !== null),
   };
   const revision = readId(file.revision);
   if (revision) world.revision = revision;

@@ -2,9 +2,9 @@
 import { heightAt, range, resample } from '../io/heightmap';
 import { BRUSH_KINDS, DEFAULT_BRUSH, DEFAULT_FIELD, FIELD_KINDS } from '../terrain/brush';
 import type { FieldSpec } from '../terrain/brush';
-import { GRID_MAX, GRID_SIZES, assetOf } from '../model/types';
-import type { Light, LightKind, Placed, SpawnPoint, Terrain, World } from '../model/types';
-import { deleteSelected, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, setBrush, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { GRID_MAX, GRID_SIZES, MATERIAL_PRESETS, assetOf } from '../model/types';
+import type { Light, LightKind, Material, Placed, SpawnPoint, Terrain, World, Zone } from '../model/types';
+import { addMaterial, deleteSelected, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, removeMaterial, setBrush, updateMaterial, updateZone, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
 import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
@@ -141,7 +141,7 @@ function SpawnPanel({ spawn }: { spawn: SpawnPoint }) {
 function TerrainPanel({ terrain }: { terrain: Terrain }) {
   const update = (patch: Partial<Terrain>) => updateTerrain({ ...terrain, ...patch } as Terrain);
   const tool = useEditor((s) => s.tool);
-  const brush = tool?.brush ?? DEFAULT_BRUSH;
+  const brush = tool?.kind === 'sculpt' ? tool.brush : DEFAULT_BRUSH;
   // What the next generated field looks like, and where the next fetched elevation is; not part of the world, so they live here.
   const [field, setField] = useState<FieldSpec>(DEFAULT_FIELD);
   const [place, setPlace] = useState({ lat: 45.9763, lon: 7.6586, radius: 2000 });
@@ -188,7 +188,7 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
           <h2>Sculpt</h2>
           <div className="segmented wrap" role="group" aria-label="Brush">
             {BRUSH_KINDS.map((b) => (
-              <button key={b.id} type="button" className={tool?.brush.kind === b.id ? 'on' : ''} title={b.hint} onClick={() => (tool?.brush.kind === b.id ? setTool(null) : setTool({ kind: 'sculpt', brush: { ...brush, kind: b.id } }))}>
+              <button key={b.id} type="button" className={tool?.kind === 'sculpt' && tool.brush.kind === b.id ? 'on' : ''} title={b.hint} onClick={() => (tool?.kind === 'sculpt' && tool.brush.kind === b.id ? setTool(null) : setTool({ kind: 'sculpt', brush: { ...brush, kind: b.id } }))}>
                 {b.label}
               </button>
             ))}
@@ -198,7 +198,7 @@ function TerrainPanel({ terrain }: { terrain: Terrain }) {
             <NumberField label={brush.kind === 'raise' || brush.kind === 'lower' ? 'Speed' : 'Strength'} unit={brush.kind === 'raise' || brush.kind === 'lower' ? 'm/s' : '/s'} value={brush.strength} min={0.01} step={0.25} decimals={2} onChange={(strength) => setBrush({ strength })} />
           </div>
           {brush.kind === 'set' && <NumberField label="Set to" unit="m" value={brush.target} step={0.1} decimals={2} onChange={(target) => setBrush({ target })} />}
-          <p className="note">{tool ? 'Drag on the ground in the viewport. Each stroke is one undo step.' : 'Pick a brush, then drag on the ground. Two fingers or the right button still turn the camera.'}</p>
+          <p className="note">{tool?.kind === 'sculpt' ? 'Drag on the ground in the viewport. Each stroke is one undo step.' : 'Pick a brush, then drag on the ground. Two fingers or the right button still turn the camera.'}</p>
           <h2>Generate</h2>
           <SelectField label="Field" value={field.kind} options={FIELD_KINDS} onChange={(kind) => setField({ ...field, kind })} />
           <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
@@ -263,6 +263,46 @@ const spacingText = (dx: number, dy: number): string => (Math.max(dx, dy) >= 1 ?
 /** The heights on an `n` × `n` grid, bilinear. */
 const resampleTo = (terrain: Extract<Terrain, { kind: 'heightmap' }>, n: number): Float32Array => resample(terrain, n);
 
+function ZonePanel({ world, zone }: { world: World; zone: Zone }) {
+  const update = (patch: Partial<Zone>) => updateZone(zone.id, patch);
+  const [x0, y0, x1, y1] = zone.rect;
+  const centre: [number, number] = [(x0 + x1) / 2, (y0 + y1) / 2];
+  const size: [number, number] = [x1 - x0, y1 - y0];
+  const place = (c: [number, number], s: [number, number]) => update({ rect: [c[0] - s[0] / 2, c[1] - s[1] / 2, c[0] + s[0] / 2, c[1] + s[1] / 2] });
+  return (
+    <div className="params">
+      <Head title={zone.name} note="Surface zone: a patch of the ground with a surface of its own" />
+      <TextField label="Name" value={zone.name} onChange={(name) => update({ name })} />
+      <SelectField label="Surface" value={zone.material} options={world.materials.map((m) => ({ id: m.id, label: `${m.name} (friction ${m.friction})` }))} onChange={(material) => update({ material })} />
+      <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <NumberField label="Centre X" unit="m" value={centre[0]} step={0.5} decimals={2} onChange={(v) => place([v, centre[1]], size)} />
+        <NumberField label="Centre Y" unit="m" value={centre[1]} step={0.5} decimals={2} onChange={(v) => place([centre[0], v], size)} />
+      </div>
+      <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <NumberField label="Width (X)" unit="m" value={size[0]} min={0.05} step={0.5} decimals={2} onChange={(v) => place(centre, [v, size[1]])} />
+        <NumberField label="Depth (Y)" unit="m" value={size[1]} min={0.05} step={0.5} decimals={2} onChange={(v) => place(centre, [size[0], v])} />
+      </div>
+      <p className="note">Every engine gets the zone as a collision piece of its own, a hair over the ground, with this surface's friction. The surfaces themselves are edited in the world settings.</p>
+      <Actions />
+    </div>
+  );
+}
+
+function MaterialRow({ material }: { material: Material }) {
+  const update = (patch: Partial<Material>) => updateMaterial(material.id, patch);
+  return (
+    <div className="material-row">
+      <ColorField label="Colour" value={material.color} onChange={(color) => update({ color })} />
+      <TextField label="Name" value={material.name} onChange={(name) => update({ name })} />
+      <NumberField label="Friction" value={material.friction} min={0} step={0.1} decimals={2} onChange={(friction) => update({ friction })} />
+      <NumberField label="Bounce" value={material.restitution} min={0} max={1} step={0.05} decimals={2} onChange={(restitution) => update({ restitution })} />
+      <button type="button" className="icon-button" title="Remove the surface and the zones that have it" aria-label={`Remove ${material.name}`} onClick={() => removeMaterial(material.id)}>
+        <TrashIcon />
+      </button>
+    </div>
+  );
+}
+
 function WorldPanel({ world }: { world: World }) {
   return (
     <div className="params">
@@ -280,6 +320,20 @@ function WorldPanel({ world }: { world: World }) {
         <dt>Spawn points</dt>
         <dd>{world.spawns.length}</dd>
       </dl>
+      <h2>Surfaces</h2>
+      {world.materials.map((m) => (
+        <MaterialRow key={m.id} material={m} />
+      ))}
+      <SelectField
+        label="Add a surface"
+        value=""
+        options={[{ id: '', label: 'Pick one…' }, ...MATERIAL_PRESETS.map((p) => ({ id: p.name, label: `${p.name} (friction ${p.friction})` }))]}
+        onChange={(name) => {
+          const preset = MATERIAL_PRESETS.find((p) => p.name === name);
+          if (preset) addMaterial(preset);
+        }}
+      />
+      <p className="note">The ground's own friction is set on the terrain; a surface here is what a zone drawn on the ground gets.</p>
       <div className="inspector-actions">
         <button type="button" className="primary" onClick={() => showExport(true)}>
           <ExportIcon /> Export world…
@@ -303,6 +357,9 @@ export function Inspector() {
   } else if (pick?.kind === 'spawn') {
     const spawn = world.spawns.find((s) => s.id === pick.id);
     if (spawn) body = <SpawnPanel spawn={spawn} />;
+  } else if (pick?.kind === 'zone') {
+    const zone = world.zones.find((z) => z.id === pick.id);
+    if (zone) body = <ZonePanel world={world} zone={zone} />;
   }
   return <aside className="inspector">{body}</aside>;
 }
