@@ -4,7 +4,7 @@
 // rigid bodies, and each robot referenced from the USD stage its PlastikCAD
 // package carries (Isaac's URDF importer wrote it).
 import { degrees } from '../model/math';
-import { assetOf, assetPresent } from '../model/types';
+import { assetOf, assetPresent, isProp } from '../model/types';
 import type { Light, Placed, Pose, Terrain, Vec3, World } from '../model/types';
 import { bundleName, claimFolder, fmt } from './export';
 import type { ExportBundle, ExportFile, MeshData, Resolved } from './export';
@@ -211,7 +211,7 @@ export function isaacBundle(world: World, resolved: Resolved): ExportBundle {
   for (const placed of world.objects) {
     const asset = assetOf(world, placed);
     if (!asset) continue;
-    if (asset.kind === 'mesh') {
+    if (isProp(asset)) {
       const mesh = resolved.meshes[asset.id];
       if (!mesh?.data || mesh.data.indices.length === 0) {
         notes.push(`${placed.name}: its mesh could not be read as triangles, so it was left out.`);

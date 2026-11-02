@@ -29,11 +29,13 @@ export function boundsOf(data: MeshData): Bounds {
   return Number.isFinite(min[0]) ? { min, max } : { min: [0, 0, 0], max: [0, 0, 0] };
 }
 
-/** A mesh asset as the writers see it: the GLB bytes, its triangles, and its box. */
+/** A mesh asset as the writers see it: the GLB bytes (none for a library part), its triangles, and its box. */
 export interface ResolvedMesh {
   glb: Uint8Array | null;
   data: MeshData | null;
   bounds: Bounds;
+  /** A library part's convex pieces, for the engine that collides with a mesh as its convex hull (MuJoCo). */
+  pieces?: MeshData[];
 }
 
 export interface Resolved {

@@ -211,6 +211,14 @@ each in all three engines.
 
 ## Phase 7. Parts library (L)
 
+**Done 2026-11-02**, with one change of plan: every piece is generated from
+parameters in `src/parts/` rather than shipped as a GLB, so nothing had to
+be modelled first, the APK carries no meshes, and a piece stays editable
+after it is placed. The generators give MuJoCo convex pieces (a room is its
+floor and walls), the other engines the merged mesh. The library dialog
+draws each card with a small shared renderer. A pack of PlastikCAD-made GLBs
+can be added later through the same asset path.
+
 - A library index (`library/index.json`: id, name, category, tags, a
   thumbnail, the GLB, collision hint, physics defaults) shipped with the
   app; small GLBs, a size budget of about 20 MB so the APK stays

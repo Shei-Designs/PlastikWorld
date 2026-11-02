@@ -109,6 +109,12 @@ export const MenuIcon = () => (
     <path d="M4 7h16M4 12h16M4 17h16" />
   </Icon>
 );
+export const LibraryIcon = () => (
+  <Icon>
+    <path d="M4 5h5v14H4zM11 5h5v14h-5z" />
+    <path d="M17.5 6.2l3.6-1 3.3 12.6-3.6 1z" transform="translate(-2.4 0)" />
+  </Icon>
+);
 export const SlidersIcon = () => (
   <Icon>
     <path d="M4 7h10M18 7h2M4 17h4M12 17h8M4 12h2M10 12h10" />

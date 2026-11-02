@@ -18,12 +18,14 @@ import { boxAround, copernicusTile, heightsFromDem, openDem, openDemUrl } from '
 import type { Dem, DemBox, DemFit, FetchLike } from '../terrain/elevation';
 import { parseWorld, parseWorldText, serializeWorld, serializeWorldText } from '../model/file';
 import { add, newId, uniqueName } from '../model/math';
-import { DEFAULT_PHYSICS, GRID_DEFAULT, MATERIAL_PRESETS, assetPresent, emptyWorld } from '../model/types';
-import type { Asset, Light, LightKind, Material, Pick, Placed, SpawnPoint, Terrain, Vec3, World, Zone } from '../model/types';
+import { DEFAULT_PHYSICS, GRID_DEFAULT, MATERIAL_PRESETS, assetPresent, emptyWorld, isProp } from '../model/types';
+import type { Asset, Light, LightKind, Material, PartAsset, Pick, Placed, SpawnPoint, Terrain, Vec3, World, Zone } from '../model/types';
+import { partById, settle } from '../parts/library';
+import type { PartParams } from '../parts/library';
 import * as platform from '../platform';
 import { inspectPackage } from '../robot/package';
 import type { PackageFiles } from '../robot/package';
-import { collectFiles, forget, keepGlb, keepRobot, resolveMesh, restoreAssets } from './assets';
+import { collectFiles, forget, keepGlb, keepPart, keepRobot, resolveMesh, restoreAssets } from './assets';
 import { loadPrefs, savePrefs } from './persist';
 import { DiskWorlds, MemoryWorlds, fileNameFor, hasWorldStore, openWorldStore, useWorldStore, worldStore } from './worlds';
 import type { WorldInfo } from './worlds';
@@ -65,6 +67,8 @@ export interface EditorState {
   storage: { location: string | null; defaultDir: string | null; fixed: boolean } | null;
   /** The worlds browser is open. */
   browsing: boolean;
+  /** The parts library is open. */
+  library: boolean;
   /** On a narrow screen (a tablet), the side panel drawn over the viewport, if any. */
   panel: 'sidebar' | 'inspector' | null;
   worlds: WorldInfo[];
@@ -90,6 +94,7 @@ let state: EditorState = {
   elevationImport: null,
   storage: null,
   browsing: false,
+  library: false,
   panel: null,
   worlds: [],
   exporting: false,
@@ -236,8 +241,36 @@ export function placeAt(point: Vec3): void {
 
 function addPlaced(asset: Asset, at: Vec3): void {
   const id = newId();
-  const placed: Placed = { id, name: uniqueName(asset.name, names(state.world)), asset: asset.id, pose: { xyz: at, rpy: [0, 0, 0] }, scale: 1, physics: asset.kind === 'robot' ? { ...DEFAULT_PHYSICS, static: false } : { ...DEFAULT_PHYSICS } };
+  const physics = asset.kind === 'robot' ? { ...DEFAULT_PHYSICS, static: false } : asset.kind === 'part' ? { ...(partById(asset.part)?.physics ?? DEFAULT_PHYSICS) } : { ...DEFAULT_PHYSICS };
+  const placed: Placed = { id, name: uniqueName(asset.name, names(state.world)), asset: asset.id, pose: { xyz: at, rpy: [0, 0, 0] }, scale: 1, physics };
   edit((w) => ({ ...w, objects: [...w.objects, placed] }), { selection: [id], pick: { kind: 'object', id } });
+}
+
+// --- the parts library -------------------------------------------------------
+
+export const showLibrary = (open: boolean): void => set({ library: open });
+
+/** A piece from the library, as an asset of its own with the generator's defaults, placed at the origin and picked. */
+export function addPart(partId: string, at: Vec3 = [0, 0, 0]): void {
+  const def = partById(partId);
+  if (!def) return;
+  const asset: PartAsset = { kind: 'part', id: newId(), name: uniqueName(def.name, new Set(state.world.assets.map((a) => a.name))), part: partId, params: settle(def, {}), source: { name: 'Parts library', path: null, size: 0 } };
+  keepPart(asset);
+  edit((w) => ({ ...w, assets: [...w.assets, asset] }));
+  addPlaced(asset, at);
+  set({ library: false });
+}
+
+/** New numbers for a part: every placement of it changes, as one step of the history. */
+export function updatePartParams(assetId: string, params: PartParams): void {
+  const asset = state.world.assets.find((a) => a.id === assetId);
+  if (asset?.kind !== 'part') return;
+  const def = partById(asset.part);
+  if (!def) return;
+  const next: PartAsset = { ...asset, params: settle(def, { ...asset.params, ...params }) };
+  forget(asset.id);
+  keepPart(next);
+  edit((w) => ({ ...w, assets: w.assets.map((a) => (a.id === assetId ? next : a)) }));
 }
 
 export function addLight(kind: LightKind, at: Vec3 = [0, 0, 3]): void {
@@ -773,7 +806,7 @@ async function settleAssets(): Promise<void> {
     for (const asset of absent) {
       try {
         if (asset.kind === 'mesh') filled.set(asset.id, { ...asset, data: (await platform.readPath(asset.source.path!)).bytes });
-        else filled.set(asset.id, { ...asset, files: await collectFiles((await platform.folderAt(asset.source.path!)).files) });
+        else if (asset.kind === 'robot') filled.set(asset.id, { ...asset, files: await collectFiles((await platform.folderAt(asset.source.path!)).files) });
       } catch (err) {
         console.warn(`Could not read ${asset.name} back:`, err);
       }
@@ -938,7 +971,7 @@ const WRITERS: Record<Engine, (world: World, resolved: Resolved) => ExportBundle
 export async function buildBundle(engine: Engine): Promise<ExportBundle> {
   const resolved: Resolved = { meshes: {} };
   for (const asset of state.world.assets) {
-    if (asset.kind !== 'mesh') continue;
+    if (!isProp(asset)) continue;
     const mesh = await resolveMesh(asset.id);
     if (mesh) resolved.meshes[asset.id] = mesh;
   }

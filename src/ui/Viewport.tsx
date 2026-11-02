@@ -21,6 +21,7 @@ export const viewerRef: { current: Viewer | null } = { current: null };
 function visualOf(world: World, assetId: string): Visual {
   const loaded = loadedAsset(assetId);
   if (loaded?.kind === 'glb') return { kind: 'glb', key: assetId, bytes: loaded.bytes };
+  if (loaded?.kind === 'part') return { kind: 'mesh', key: loaded.key, data: loaded.resolved.data! };
   if (loaded?.kind === 'robot') return { kind: 'robot', key: assetId, parts: loaded.parts };
   void world;
   return { kind: 'missing', key: assetId };

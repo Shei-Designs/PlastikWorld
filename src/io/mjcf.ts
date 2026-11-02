@@ -3,7 +3,7 @@
 // each, since MuJoCo reads no GLB), and each robot brought in by attaching its
 // own model file, so its actuators and sensors come along and its floor does not.
 import { quatOf } from '../model/math';
-import { assetOf, assetPresent } from '../model/types';
+import { assetOf, assetPresent, isProp } from '../model/types';
 import type { Light, World } from '../model/types';
 import { bundleName, claimFolder, escapeXml, fmt, vec } from './export';
 import type { ExportBundle, ExportFile, Resolved } from './export';
@@ -81,10 +81,36 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
     const asset = assetOf(world, placed);
     if (!asset) continue;
     const bodyName = identifier(placed.name, 'prop');
-    if (asset.kind === 'mesh') {
+    if (isProp(asset)) {
       const mesh = resolved.meshes[asset.id];
       if (!mesh?.data || mesh.data.indices.length === 0) {
         notes.push(`${placed.name}: its mesh could not be read as triangles, so it was left out.`);
+        continue;
+      }
+      if (mesh.pieces && mesh.pieces.length > 1 && placed.physics.collision === 'mesh') {
+        // MuJoCo collides with a mesh as its convex hull, so a part made of pieces (a room, a table) is a geom per piece.
+        const base = identifier(asset.name, 'mesh');
+        if (!written.has(asset.id)) {
+          written.set(asset.id, base);
+          mesh.pieces.forEach((piece, i) => {
+            files.push({ path: `meshes/${base}_${i + 1}.obj`, text: writeObj(`${asset.name} ${i + 1}`, piece) });
+            assets.push(`    <mesh name="${base}_${i + 1}" file="${base}_${i + 1}.obj"${placed.scale !== 1 ? '' : ''}/>`);
+          });
+        }
+        const mass = placed.physics.static ? '' : ` mass="${fmt(placed.physics.mass / mesh.pieces.length, 6)}"`;
+        const lines = [`    <body name="${escapeXml(bodyName)}" pos="${vec(placed.pose.xyz)}" quat="${quat(placed.pose.rpy)}">`];
+        if (!placed.physics.static) lines.push(`      <freejoint name="${escapeXml(bodyName)}_free"/>`);
+        const scale = placed.scale !== 1 ? ` scale="${fmt(placed.scale, 6)} ${fmt(placed.scale, 6)} ${fmt(placed.scale, 6)}"` : '';
+        mesh.pieces.forEach((_, i) => {
+          let name = `${base}_${i + 1}`;
+          if (scale) {
+            assets.push(`    <mesh name="${name}_${bodyName}" file="${name}.obj"${scale}/>`);
+            name = `${name}_${bodyName}`;
+          }
+          lines.push(`      <geom type="mesh" mesh="${name}" ${frictionAttr(placed.physics.friction)}${mass}/>`);
+        });
+        lines.push('    </body>');
+        bodies.push(lines.join('\n'));
         continue;
       }
       let meshName = written.get(asset.id);

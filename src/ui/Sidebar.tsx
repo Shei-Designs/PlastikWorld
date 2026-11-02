@@ -20,12 +20,13 @@ import {
   setTool,
   showAbout,
   showExport,
+  showLibrary,
   startPlacing,
   toggleTheme,
   updateWorld,
   useEditor,
 } from '../state/store';
-import { CubeIcon, GridIcon, FlagIcon, ImportIcon, LightIcon, Logo, MenuIcon, MoonIcon, PlusIcon, RobotIcon, SunIcon, TerrainIcon, TrashIcon, WorldIcon } from './icons';
+import { CubeIcon, GridIcon, LibraryIcon, FlagIcon, ImportIcon, LightIcon, Logo, MenuIcon, MoonIcon, PlusIcon, RobotIcon, SunIcon, TerrainIcon, TrashIcon, WorldIcon } from './icons';
 import { Popover } from './Popover';
 
 const LIGHT_KINDS: { id: LightKind; label: string }[] = [
@@ -81,7 +82,7 @@ function FileMenu() {
 }
 
 function assetIcon(asset: Asset | undefined) {
-  return asset?.kind === 'robot' ? <RobotIcon /> : <CubeIcon />;
+  return asset?.kind === 'robot' ? <RobotIcon /> : asset?.kind === 'part' ? <LibraryIcon /> : <CubeIcon />;
 }
 
 export function Sidebar() {
@@ -222,6 +223,9 @@ export function Sidebar() {
           </button>
           <button type="button" className="chip wide" onClick={() => void importRobot()} title="Import a ROS 2 package, Gazebo model or MuJoCo model folder (Ctrl+Shift+I)">
             <RobotIcon /> Robot
+          </button>
+          <button type="button" className="chip wide" onClick={() => showLibrary(true)} title="Add a wall, a ramp, a cone… from the parts library (Ctrl+L)">
+            <LibraryIcon /> Parts
           </button>
         </div>
       </div>

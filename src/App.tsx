@@ -25,6 +25,7 @@ import {
   setTool,
   showAbout,
   showExport,
+  showLibrary,
   showPanel,
   titleOf,
   undo,
@@ -34,6 +35,7 @@ import { About } from './ui/About';
 import { ExportDialog } from './ui/ExportDialog';
 import { ElevationDialog } from './ui/ElevationDialog';
 import { HeightmapDialog } from './ui/HeightmapDialog';
+import { LibraryDialog } from './ui/LibraryDialog';
 import { Inspector } from './ui/Inspector';
 import { Sidebar } from './ui/Sidebar';
 import { Viewport, viewerRef } from './ui/Viewport';
@@ -62,7 +64,7 @@ function onKeyDown(e: KeyboardEvent): void {
   // File commands work everywhere, including from inside a text box.
   if (mod && !e.altKey) {
     const command =
-      key === 's' ? (e.shiftKey ? saveCopy : saveNow) : key === 'o' ? (e.shiftKey ? openWorldFile : openWorlds) : key === 'n' ? newWorld : key === 'i' ? (e.shiftKey ? importRobot : importObjects) : key === 'e' ? () => showExport(true) : null;
+      key === 's' ? (e.shiftKey ? saveCopy : saveNow) : key === 'o' ? (e.shiftKey ? openWorldFile : openWorlds) : key === 'n' ? newWorld : key === 'i' ? (e.shiftKey ? importRobot : importObjects) : key === 'e' ? () => showExport(true) : key === 'l' ? () => showLibrary(true) : null;
     if (command) {
       e.preventDefault();
       commitTyping();
@@ -191,6 +193,7 @@ export default function App() {
       <ExportDialog />
       <HeightmapDialog />
       <ElevationDialog />
+      <LibraryDialog />
       <WorldsDialog />
     </div>
   );

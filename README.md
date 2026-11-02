@@ -110,6 +110,22 @@ Over a few kilometres the flat-earth error is well under a percent. Terrain
 is made here and never imported as a mesh: a bridge spans a valley as an
 object, a tunnel is an object in the ground.
 
+### Parts
+
+**Parts** (Ctrl+L) opens a library of the generic pieces a world is built
+from: walls and rooms, floor slabs, ramps and stairs, fences, roads, parking
+lots, curbs, jersey barriers, traffic cones, lamp posts, trees, rocks,
+bridge spans, crates, pallets, tables and shelving. None of them is a stored
+mesh: each is made from a few numbers (a wall's length, height, thickness
+and doorway; a room's size and door; a rock's seed) that you change after
+placing it, in the inspector, and every placement of that part changes with
+it. Duplicate the asset for a different one. A room is its floor and four
+walls as separate convex pieces, which matters for MuJoCo, which collides
+with a mesh as its convex hull: the exports give it a geom per piece, so a
+robot drives through the doorway rather than into a solid block. Walls,
+cones and the rest come with their own physics (a wall fixed, a cone loose
+and knockable). Objects modelled in PlastikCAD come in as GLBs beside them.
+
 ### Surfaces
 
 The ground has one friction, set on the terrain. For more, add surfaces in
@@ -269,13 +285,11 @@ exports with a note in the other two, the way robot package clashes do now.
    colour) and rectangular zones on the terrain, each a ground collision of
    its own in every engine. Textures and
    free-form zones later.
-4. **A parts library** of generic set pieces, indoor (walls, doors, floors,
-   stairs, ramps, tables, shelves, pallets, boxes, cones) and outdoor
-   (curbs, road segments, parking lines, lamp posts, fences, barriers,
-   trees, rocks, bridges). Fixed pieces ship as PlastikCAD packages with the
-   app; wall runs, slabs, ramps, stairs and fence runs are parametric and
-   generated here. Buildings with indoor and outdoor space, and parking
-   lots, are built from these on the terrain.
+4. **A parts library.** Done, all of it generated from parameters in the
+   app: walls, rooms, slabs, ramps, stairs, fences, roads, parking lots,
+   curbs, barriers, cones, lamp posts, trees, rocks, bridges, crates,
+   pallets, tables and shelving. A pack of pieces modelled in PlastikCAD can
+   join later as GLB assets.
 5. **Demo drive.** Kinematic teleoperation in the viewer (keyboard or
    gamepad; differential, Ackermann or holonomic), the robot following the
    ground by ray cast with bounding-box collision against props. Not a

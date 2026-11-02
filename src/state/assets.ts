@@ -5,7 +5,8 @@ import { loadGlb, meshDataOf } from '../io/meshes';
 import { boundsOf } from '../io/export';
 import type { ResolvedMesh } from '../io/export';
 import { assetPresent } from '../model/types';
-import type { Asset, MeshAsset, Pose, RobotAsset, Vec3 } from '../model/types';
+import type { Asset, MeshAsset, PartAsset, Pose, RobotAsset, Vec3 } from '../model/types';
+import { buildPart, partById } from '../parts/library';
 import { visualsOf } from '../robot/package';
 import type { PackageFiles } from '../robot/package';
 
@@ -16,7 +17,7 @@ export interface RobotPart {
   scale: Vec3;
 }
 
-export type Loaded = { kind: 'glb'; bytes: Uint8Array; resolved: ResolvedMesh | null } | { kind: 'robot'; parts: RobotPart[] } | { kind: 'missing' };
+export type Loaded = { kind: 'glb'; bytes: Uint8Array; resolved: ResolvedMesh | null } | { kind: 'robot'; parts: RobotPart[] } | { kind: 'part'; key: string; resolved: ResolvedMesh } | { kind: 'missing' };
 
 const cache = new Map<string, Loaded>();
 const listeners = new Set<() => void>();
@@ -55,6 +56,17 @@ export async function collectFiles(files: PackageFiles): Promise<Record<string, 
 
 export function keepGlb(asset: MeshAsset): void {
   set(asset.id, assetPresent(asset) ? { kind: 'glb', bytes: asset.data, resolved: null } : { kind: 'missing' });
+}
+
+/** A library part built from its parameters; `key` tells the viewer which build it holds. */
+export function keepPart(asset: PartAsset): void {
+  const def = partById(asset.part);
+  if (!def) {
+    set(asset.id, { kind: 'missing' });
+    return;
+  }
+  const { pieces, merged } = buildPart(def, asset.params);
+  set(asset.id, { kind: 'part', key: `${asset.id}:${JSON.stringify(asset.params)}`, resolved: { glb: null, data: merged, bounds: boundsOf(merged), pieces } });
 }
 
 /** The robot's visual meshes, read from its package files and placed in its frame. Meshes other than OBJ are skipped. */
@@ -100,6 +112,7 @@ export async function restoreAssets(assets: Asset[]): Promise<string[]> {
       continue;
     }
     if (asset.kind === 'mesh') keepGlb(asset);
+    else if (asset.kind === 'part') keepPart(asset);
     else notes.push(...(await keepRobot(asset)));
   }
   return notes;
@@ -108,6 +121,7 @@ export async function restoreAssets(assets: Asset[]): Promise<string[]> {
 /** A GLB's triangles and box, for the writers; computed once per asset. */
 export async function resolveMesh(id: string): Promise<ResolvedMesh | null> {
   const loaded = cache.get(id);
+  if (loaded?.kind === 'part') return loaded.resolved;
   if (!loaded || loaded.kind !== 'glb') return null;
   if (loaded.resolved) return loaded.resolved;
   try {

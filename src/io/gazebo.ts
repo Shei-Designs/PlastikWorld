@@ -19,7 +19,7 @@ import { placedZones, zoneMesh } from './zones';
  * crate on the ice zone held fast in the smoke test at 2 mm).
  */
 const GAZEBO_ZONE_LIFT = 0.01;
-import { assetOf, assetPresent } from '../model/types';
+import { assetOf, assetPresent, isProp } from '../model/types';
 import type { Light, Placed, Pose, RobotAsset, World } from '../model/types';
 
 const poseXml = (pose: Pose): string => `<pose>${vec(pose.xyz)} ${vec(pose.rpy)}</pose>`;
@@ -259,15 +259,16 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
   for (const placed of world.objects) {
     const asset = assetOf(world, placed);
     if (!asset) continue;
-    if (asset.kind === 'mesh') {
+    if (isProp(asset)) {
       const mesh = resolved.meshes[asset.id];
-      const file = `meshes/${identifier(asset.name, 'mesh')}.glb`;
-      if (!mesh?.glb) {
-        notes.push(`${placed.name}: its GLB could not be read, so it was left out.`);
+      // A GLB goes out as it came; a library part, which has none, as an OBJ of its triangles.
+      const file = `meshes/${identifier(asset.name, 'mesh')}.${mesh?.glb ? 'glb' : 'obj'}`;
+      if (!mesh?.glb && !mesh?.data) {
+        notes.push(`${placed.name}: its mesh could not be read, so it was left out.`);
         continue;
       }
       if (!written.has(file)) {
-        files.push({ path: file, bytes: mesh.glb });
+        files.push(mesh.glb ? { path: file, bytes: mesh.glb } : { path: file, text: writeObj(asset.name, mesh.data!) });
         written.add(file);
       }
       // DART, Gazebo's physics, cannot settle a moving triangle mesh on a heightmap: it rocks and creeps for good.

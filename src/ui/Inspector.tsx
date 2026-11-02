@@ -2,9 +2,10 @@
 import { heightAt, range, resample } from '../io/heightmap';
 import { BRUSH_KINDS, DEFAULT_BRUSH, DEFAULT_FIELD, FIELD_KINDS } from '../terrain/brush';
 import type { FieldSpec } from '../terrain/brush';
-import { GRID_MAX, GRID_SIZES, MATERIAL_PRESETS, assetOf } from '../model/types';
-import type { Light, LightKind, Material, Placed, SpawnPoint, Terrain, World, Zone } from '../model/types';
-import { addMaterial, deleteSelected, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, removeMaterial, setBrush, updateMaterial, updateZone, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { partById } from '../parts/library';
+import { GRID_MAX, GRID_SIZES, MATERIAL_PRESETS, assetOf, isProp } from '../model/types';
+import type { Asset, Light, LightKind, Material, Placed, SpawnPoint, Terrain, World, Zone } from '../model/types';
+import { addMaterial, deleteSelected, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, removeMaterial, setBrush, updatePartParams, updateMaterial, updateZone, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
 import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
@@ -55,6 +56,22 @@ function Actions() {
   );
 }
 
+/** A library part's numbers; changing one changes every placement of the part. */
+function PartFields({ asset }: { asset: Extract<Asset, { kind: 'part' }> }) {
+  const def = partById(asset.part);
+  if (!def) return <p className="note">This part is not in the library any more.</p>;
+  const placements = useEditor((s) => s.world.objects.filter((o) => o.asset === asset.id).length);
+  return (
+    <>
+      <h2>Shape</h2>
+      {def.params.map((spec) => (
+        <NumberField key={spec.id} label={spec.label} unit={spec.unit || undefined} value={asset.params[spec.id] ?? spec.value} min={spec.min} max={spec.max} step={spec.step} decimals={spec.step >= 1 ? 0 : 2} onChange={(v) => updatePartParams(asset.id, { [spec.id]: v })} />
+      ))}
+      {placements > 1 && <p className="note">These numbers are the part's: all {placements} placements of it change together. Duplicate the asset for a different one.</p>}
+    </>
+  );
+}
+
 function ObjectPanel({ world, placed }: { world: World; placed: Placed }) {
   const asset = assetOf(world, placed);
   const robot = asset?.kind === 'robot';
@@ -62,8 +79,9 @@ function ObjectPanel({ world, placed }: { world: World; placed: Placed }) {
   const physics = (patch: Partial<Placed['physics']>) => update({ physics: { ...placed.physics, ...patch } });
   return (
     <div className="params">
-      <Head title={placed.name} note={robot ? `Robot from a ${asset.format === 'ros' ? 'ROS 2 package' : asset.format === 'gazebo' ? 'Gazebo model' : 'MuJoCo model'}` : 'Object from a GLB'} />
+      <Head title={placed.name} note={robot ? `Robot from a ${asset.format === 'ros' ? 'ROS 2 package' : asset.format === 'gazebo' ? 'Gazebo model' : 'MuJoCo model'}` : asset?.kind === 'part' ? `${partById(asset.part)?.name ?? 'Part'} from the parts library` : 'Object from a GLB'} />
       <TextField label="Name" value={placed.name} onChange={(name) => update({ name })} />
+      {asset?.kind === 'part' && <PartFields asset={asset} />}
       <h2>Where it {robot ? 'starts' : 'sits'}</h2>
       <PoseFields pose={placed.pose} onChange={(pose) => update({ pose })} />
       {!robot && <NumberField label="Scale" value={placed.scale} min={0.001} step={0.1} onChange={(scale) => update({ scale })} />}
@@ -312,7 +330,7 @@ function WorldPanel({ world }: { world: World }) {
       <h2>Contents</h2>
       <dl className="info-rows">
         <dt>Objects</dt>
-        <dd>{world.objects.filter((o) => assetOf(world, o)?.kind === 'mesh').length}</dd>
+        <dd>{world.objects.filter((o) => isProp(assetOf(world, o))).length}</dd>
         <dt>Robots</dt>
         <dd>{world.objects.filter((o) => assetOf(world, o)?.kind === 'robot').length}</dd>
         <dt>Lights</dt>

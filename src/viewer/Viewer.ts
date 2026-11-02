@@ -47,6 +47,7 @@ import {
 import type { WebGLRenderTarget } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import type { MeshData } from '../io/export';
 import { heightAt } from '../io/heightmap';
 import { loadGlb, loadObj } from '../io/meshes';
 import { quatOf } from '../model/math';
@@ -66,6 +67,7 @@ export interface ViewerOptions {
 /** What an item is drawn as. `key` names the loaded asset, shared by every item placed from it. */
 export type Visual =
   | { kind: 'glb'; key: string; bytes: Uint8Array }
+  | { kind: 'mesh'; key: string; data: MeshData }
   | { kind: 'robot'; key: string; parts: { obj: Uint8Array; mtl: Uint8Array | null; pose: Pose; scale: Vec3 }[] }
   | { kind: 'missing'; key: string }
   | { kind: 'light'; light: LightKind }
@@ -167,6 +169,19 @@ type Drag =
   | { mode: 'zone'; from: Vector3; to: Vector3 };
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
+
+/** Triangles with vertex colours as a drawable object, flat shaded (the parts are boxes and cylinders). */
+function meshObject(data: MeshData): Object3D {
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(data.positions, 3));
+  geometry.setIndex(new BufferAttribute(data.indices, 1));
+  if (data.colors) geometry.setAttribute('color', new BufferAttribute(data.colors, 3));
+  geometry.computeVertexNormals();
+  const material = new MeshStandardMaterial({ vertexColors: !!data.colors, color: data.colors ? 0xffffff : 0x9a9a9a, roughness: 0.85, metalness: 0, flatShading: true });
+  const group = new Group();
+  group.add(new Mesh(geometry, material));
+  return group;
+}
 const easeInOut = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 const dragThreshold = (event: PointerEvent): number => (event.pointerType === 'touch' ? TOUCH_DRAG_THRESHOLD : DRAG_THRESHOLD);
 
@@ -733,7 +748,7 @@ export class Viewer {
     }
     let asset = this.assets.get(key);
     if (!asset) {
-      const loading = (visual.kind === 'glb' ? loadGlb(visual.bytes) : Promise.resolve(this.robotObject(visual.parts))).catch((err) => {
+      const loading = (visual.kind === 'glb' ? loadGlb(visual.bytes) : visual.kind === 'mesh' ? Promise.resolve(meshObject(visual.data)) : Promise.resolve(this.robotObject(visual.parts))).catch((err) => {
         console.warn(`Could not load ${d.item.name}:`, err);
         return missingObject(t.accent);
       });

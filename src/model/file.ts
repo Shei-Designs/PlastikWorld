@@ -43,7 +43,9 @@ const terrainJson = (t: Terrain): Record<string, unknown> =>
 const assetJson = (a: Asset): Record<string, unknown> =>
   a.kind === 'mesh'
     ? { kind: a.kind, id: a.id, name: a.name, source: a.source, data: toBase64(a.data) }
-    : { kind: a.kind, id: a.id, name: a.name, format: a.format, source: a.source, modelName: a.modelName, entry: a.entry, rootBody: a.rootBody, usd: a.usd, files: Object.fromEntries(Object.keys(a.files).sort().map((p) => [p, toBase64(a.files[p])])) };
+    : a.kind === 'part'
+      ? { kind: a.kind, id: a.id, name: a.name, part: a.part, params: a.params, source: a.source }
+      : { kind: a.kind, id: a.id, name: a.name, format: a.format, source: a.source, modelName: a.modelName, entry: a.entry, rootBody: a.rootBody, usd: a.usd, files: Object.fromEntries(Object.keys(a.files).sort().map((p) => [p, toBase64(a.files[p])])) };
 
 /** The world as text: the header first, the scene, then the assets. */
 export function serializeWorldText(world: World): string {
@@ -113,6 +115,13 @@ function asset(raw: Record<string, unknown>, index: number): Asset | null {
       usd: typeof raw.usd === 'string' ? raw.usd : null,
       files,
     };
+  }
+  if (raw.kind === 'part') {
+    const part = str(raw.part, '');
+    if (!part) return null;
+    const params: Record<string, number> = {};
+    for (const [k, v] of Object.entries(record(raw.params))) if (typeof v === 'number' && Number.isFinite(v)) params[k] = v;
+    return { kind: 'part', id, name, part, params, source: source(raw.source, 'Parts library') };
   }
   return { kind: 'mesh', id, name, source: source(raw.source, name), data: typeof raw.data === 'string' ? fromBase64(raw.data) : new Uint8Array(0) };
 }

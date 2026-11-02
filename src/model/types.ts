@@ -63,10 +63,24 @@ export interface RobotAsset {
   files: Record<string, Uint8Array>;
 }
 
-export type Asset = MeshAsset | RobotAsset;
+/** A piece from the parts library: made from its parameters whenever it is needed, so the world carries only the numbers. */
+export interface PartAsset {
+  kind: 'part';
+  id: string;
+  name: string;
+  /** The generator's id in `src/parts/library.ts`. */
+  part: string;
+  params: Record<string, number>;
+  source: Source;
+}
+
+export type Asset = MeshAsset | RobotAsset | PartAsset;
 
 /** Whether an asset's data is with the world (it can be drawn and exported). */
-export const assetPresent = (asset: Asset): boolean => (asset.kind === 'mesh' ? asset.data.length > 0 : Object.keys(asset.files).length > 0);
+export const assetPresent = (asset: Asset): boolean => (asset.kind === 'mesh' ? asset.data.length > 0 : asset.kind === 'robot' ? Object.keys(asset.files).length > 0 : true);
+
+/** Whether an asset is a prop with triangles of its own (a GLB or a library part), as against a robot. */
+export const isProp = (asset: Asset | undefined): asset is MeshAsset | PartAsset => asset?.kind === 'mesh' || asset?.kind === 'part';
 
 /** How an object takes part in the physics. */
 export interface Physics {

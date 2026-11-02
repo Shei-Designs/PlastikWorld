@@ -10,8 +10,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { emptyWorld } from '../model/types';
-import type { Asset, Placed, RobotFormat, Terrain, Vec3, World } from '../model/types';
+import { emptyWorld, isProp } from '../model/types';
+import type { Asset, PartAsset, Placed, RobotFormat, Terrain, Vec3, World } from '../model/types';
+import { buildPart, partById, settle } from '../parts/library';
 import { serializeWorld } from '../model/file';
 import { inspectPackage } from '../robot/package';
 import type { PackageFiles } from '../robot/package';
@@ -326,11 +327,59 @@ async function yards(): Promise<{ worlds: World[]; resolved: Resolved }> {
     world.spawns.push({ id: 's1', name: 'Start', pose: at(0, 0, 0) });
     worlds.push(world);
   }
-  return { worlds, resolved: { meshes: { crate } } };
+  const resolved: Resolved = { meshes: { crate } };
+  worlds.push(rooms(robots, resolved));
+  return { worlds, resolved };
+}
+
+/**
+ * The third world: pieces from the parts library on flat ground. A room with
+ * a doorway in its +X wall, the rovers inside it facing the door, so that the
+ * drive test takes them through it (a jamb in the way shows as a short run);
+ * a ramp, stairs and a barrier standing about; a cone and a crate loose.
+ */
+function rooms(robots: Asset[], resolved: Resolved): World {
+  const world = emptyWorld('Smoke Rooms');
+  const part = (id: string, name: string, kind: string, params: Record<string, number>): PartAsset => {
+    const def = partById(kind)!;
+    const asset: PartAsset = { kind: 'part', id, name, part: kind, params: settle(def, params), source: { name: 'Parts library', path: null, size: 0 } };
+    const { pieces, merged } = buildPart(def, asset.params);
+    resolved.meshes[id] = { glb: null, data: merged, bounds: boundsOf(merged), pieces };
+    return asset;
+  };
+  world.assets.push(
+    part('room', 'Room', 'room', { width: 6, depth: 5, height: 2.6, thickness: 0.15, door: 2.4 }),
+    part('ramp', 'Ramp', 'ramp', { length: 3, width: 1.5, height: 0.5 }),
+    part('stairs', 'Stairs', 'stairs', { steps: 5, rise: 0.17, run: 0.28, width: 1.2 }),
+    part('barrier', 'Barrier', 'barrier', {}),
+    part('cone', 'Cone', 'cone', { height: 0.7 }),
+    part('box', 'Box', 'crate', { size: 0.4 }),
+    ...robots,
+  );
+  const fixed = (free: boolean, mass = 1) => physics(free, 'mesh', mass);
+  const pose = (x: number, y: number, z = 0, yaw = 0): Placed['pose'] => ({ xyz: [x, y, z], rpy: [0, 0, yaw] });
+  world.objects.push(
+    { id: 'r1', name: 'Room', asset: 'room', pose: pose(0, 0), scale: 1, physics: fixed(false) },
+    { id: 'ramp1', name: 'Ramp', asset: 'ramp', pose: pose(6, -6), scale: 1, physics: fixed(false) },
+    { id: 'stairs1', name: 'Stairs', asset: 'stairs', pose: pose(-7, -6), scale: 1, physics: fixed(false) },
+    { id: 'barrier1', name: 'Barrier', asset: 'barrier', pose: pose(0, 7, 0, 0.3), scale: 1, physics: fixed(false) },
+    { id: 'cone1', name: 'Cone', asset: 'cone', pose: pose(6, 4, 0.02), scale: 1, physics: fixed(true, 2) },
+    // On the room's slab, which is 0.05 m thick.
+    { id: 'box1', name: 'Box', asset: 'box', pose: pose(-1.5, 1.5, 0.07), scale: 1, physics: fixed(true, 5) },
+  );
+  for (const rover of ROVERS) {
+    const asset = robots.find((r) => r.id === rover.id);
+    if (!asset || asset.kind !== 'robot' || rover.id === 'rover_sdf') continue;
+    // Two lanes through the 2.4 m doorway at x = 3: the rover 1.4 m short of it, facing +X.
+    const y = rover.id === 'rover_ros' ? -0.6 : 0.6;
+    world.objects.push({ id: `p_${rover.id}`, name: asset.name, asset: rover.id, pose: pose(1.6, y, 0.1, -forwardOf(asset.format)), scale: 1, physics: physics(true, 'mesh') });
+  }
+  world.spawns.push({ id: 's1', name: 'Inside', pose: pose(-2, 0, 0.05) });
+  return world;
 }
 
 /** What a smoke test should find in the engine once the world has settled. */
-function expectations(world: World, bundle: ExportBundle, mainFile: string): object {
+function expectations(world: World, bundle: ExportBundle, mainFile: string, resolved: Resolved): object {
   const left = (p: Placed) => bundle.notes.some((n) => n.startsWith(`${p.name}:`));
   const ground = (x: number, y: number) => heightAt(world.terrain, x, y);
   const probes = world.objects.filter((p) => p.name.startsWith('Probe ')).map((p) => ({ xy: [p.pose.xyz[0], p.pose.xyz[1]], ground: ground(p.pose.xyz[0], p.pose.xyz[1]) }));
@@ -341,12 +390,14 @@ function expectations(world: World, bundle: ExportBundle, mainFile: string): obj
     terrain: world.terrain.kind === 'heightmap' ? { kind: 'heightmap', size: world.terrain.size, height: Math.max(...world.terrain.heights), rows: world.terrain.rows, cols: world.terrain.cols, heights: Array.from(world.terrain.heights) } : { kind: 'plane', size: world.terrain.size, height: 0 },
     probes,
     objects: world.objects
-      .filter((p) => world.assets.find((a) => a.id === p.asset)?.kind === 'mesh')
+      .filter((p) => isProp(world.assets.find((a) => a.id === p.asset)))
       .map((p) => {
         const slider = /^Slider (\w+)$/.exec(p.name);
         // On ice the crate must slide, except in Gazebo, where the crate's own friction (0.8) counts and it holds; the waxed crate slides everywhere.
         const slide = slider ? (slider[1] === 'rubber' ? { slide: 'mustNot', surface: 'rubber' } : slider[1] === 'ice' ? { slide: 'must', surface: 'ice', slideGazebo: 'mustNot' } : { slide: 'must', surface: 'ice' }) : {};
-        return { id: identifier(p.name, 'prop'), name: p.name, free: !p.physics.static, collision: p.physics.collision, xyz: p.pose.xyz, ground: ground(p.pose.xyz[0], p.pose.xyz[1]), edge: CRATE * p.scale, probe: p.name.startsWith('Probe '), placed: !left(p), ...slide };
+        const bounds = resolved.meshes[p.asset]?.bounds;
+        const edge = (bounds ? bounds.max[2] - bounds.min[2] : CRATE) * p.scale;
+        return { id: identifier(p.name, 'prop'), name: p.name, free: !p.physics.static, collision: p.physics.collision, xyz: p.pose.xyz, ground: ground(p.pose.xyz[0], p.pose.xyz[1]), edge, probe: p.name.startsWith('Probe '), placed: !left(p), ...slide };
       }),
     robots: world.objects
       .filter((p) => world.assets.find((a) => a.id === p.asset)?.kind === 'robot')
@@ -404,11 +455,12 @@ describe('sample worlds', () => {
         // Only the ROS package carries a USD stage.
         expect(isaac.copies).toHaveLength(1);
       }
+      expect(gazebo.notes.filter((n) => /could not be read/.test(n))).toEqual([]);
       if (!OUT) continue;
       writeFileSync(join(OUT, 'worlds', `${gazebo.name}.plastikworld`), serializeWorld(world));
-      writeBundle('gazebo', world, gazebo, expectations(world, gazebo, mainFile(gazebo, '.sdf')));
-      writeBundle('mujoco', world, mujoco, expectations(world, mujoco, mainFile(mujoco, '.xml')));
-      writeBundle('isaac', world, isaac, expectations(world, isaac, mainFile(isaac, '.usda')));
+      writeBundle('gazebo', world, gazebo, expectations(world, gazebo, mainFile(gazebo, '.sdf'), resolved));
+      writeBundle('mujoco', world, mujoco, expectations(world, mujoco, mainFile(mujoco, '.xml'), resolved));
+      writeBundle('isaac', world, isaac, expectations(world, isaac, mainFile(isaac, '.usda'), resolved));
     }
     if (OUT) console.log(`sample worlds written under ${OUT} (${robots.length} robot${robots.length === 1 ? '' : 's'} from ${ROBOTS})`);
   });
