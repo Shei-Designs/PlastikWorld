@@ -380,11 +380,18 @@ export class Viewer {
     this.requestRender();
   }
 
-  /** The sky and the fog as the world has them: a sky other than a clear day colours the background, fog fades the distance. */
+  /**
+   * The sky and the fog as the world has them: a sky other than a clear day
+   * colours the background, fog fades the distance. With fog on, the
+   * background is the fog's colour, so the far ground dissolves into it the
+   * way it does in the engines, instead of being painted pale over the dark
+   * panel.
+   */
   setEnvironment(env: Environment): void {
     if (!this.ok) return;
     const sky = skyOf(env.sky);
-    if (env.sky === 'clear') this.renderer.setClearColor(0x000000, 0);
+    if (env.fog) this.renderer.setClearColor(new Color(env.fog.color[0], env.fog.color[1], env.fog.color[2]), 1);
+    else if (env.sky === 'clear') this.renderer.setClearColor(0x000000, 0);
     else this.renderer.setClearColor(new Color(sky.color[0], sky.color[1], sky.color[2]), 1);
     this.scene.fog = env.fog ? new Fog(new Color(env.fog.color[0], env.fog.color[1], env.fog.color[2]), env.fog.start, env.fog.end) : null;
     this.requestRender();

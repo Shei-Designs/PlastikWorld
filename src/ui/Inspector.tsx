@@ -110,7 +110,7 @@ function DriveFields({ world, placed }: { world: World; placed: Placed }) {
 /** A library part's numbers; changing one changes every placement of the part. */
 function PartFields({ asset }: { asset: Extract<Asset, { kind: 'part' }> }) {
   const def = partById(asset.part);
-  if (!def) return <p className="note">This part is not in the library any more.</p>;
+  if (!def) return <p className="note warn">This part is not in the library any more.</p>;
   const placements = useEditor((s) => s.world.objects.filter((o) => o.asset === asset.id).length);
   return (
     <>
@@ -169,8 +169,8 @@ function ObjectPanel({ world, placed }: { world: World; placed: Placed }) {
               </>
             )}
           </dl>
-          {robot && asset.format === 'mujoco' && <p className="note">A MuJoCo model is placed in MuJoCo worlds only. For Gazebo or Isaac, export the robot from PlastikCAD as a ROS 2 package.</p>}
-          {robot && asset.format === 'gazebo' && <p className="note">A Gazebo model is placed in Gazebo worlds only. For MuJoCo, export the robot from PlastikCAD as a MuJoCo model.</p>}
+          {robot && asset.format === 'mujoco' && <p className="note warn">A MuJoCo model is placed in MuJoCo worlds only. For Gazebo or Isaac, export the robot from PlastikCAD as a ROS 2 package.</p>}
+          {robot && asset.format === 'gazebo' && <p className="note warn">A Gazebo model is placed in Gazebo worlds only. For MuJoCo, export the robot from PlastikCAD as a MuJoCo model.</p>}
         </>
       )}
       <Actions />
@@ -375,6 +375,8 @@ function MaterialRow({ material }: { material: Material }) {
 
 /** The sky, the fog and the wind. */
 function EnvironmentFields({ env }: { env: World['environment'] }) {
+  // Fog that fits the world: thin across the yard, full well past its edge, whatever its size.
+  const extent = useEditor((s) => Math.max(s.world.terrain.size[0], s.world.terrain.size[1]));
   const windSpeed = Math.hypot(env.wind[0], env.wind[1]);
   const windFrom = (Math.atan2(env.wind[1], env.wind[0]) * 180) / Math.PI;
   const setWind = (speed: number, deg: number) => updateEnvironment({ wind: [speed * Math.cos((deg * Math.PI) / 180), speed * Math.sin((deg * Math.PI) / 180), 0] });
@@ -382,7 +384,7 @@ function EnvironmentFields({ env }: { env: World['environment'] }) {
     <>
       <h2>Sky and weather</h2>
       <SelectField label="Sky" value={env.sky} options={SKY_PRESETS.map((p) => ({ id: p.id, label: p.label }))} onChange={(sky) => updateEnvironment({ sky })} />
-      <CheckField label="Fog" value={env.fog !== null} onChange={(on) => updateEnvironment({ fog: on ? { color: skyOf(env.sky).horizon, start: 5, end: 60 } : null })} />
+      <CheckField label="Fog" value={env.fog !== null} onChange={(on) => updateEnvironment({ fog: on ? { color: skyOf(env.sky).horizon, start: Math.round(extent), end: Math.round(extent * 4) } : null })} />
       {env.fog && (
         <>
           <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
@@ -396,7 +398,7 @@ function EnvironmentFields({ env }: { env: World['environment'] }) {
         <NumberField label="Wind" unit="m/s" value={windSpeed} min={0} step={1} decimals={1} onChange={(v) => setWind(v, windFrom)} />
         <NumberField label="Blowing towards" unit="°" value={windFrom} step={15} decimals={0} onChange={(d) => setWind(windSpeed, d)} />
       </div>
-      <p className="note">The sky and the fog are what cameras and lidar see in Gazebo and Isaac Sim (MuJoCo only draws them); the wind blows in Gazebo and MuJoCo, and the Isaac export says it has none. Rain, snow and water are not in any engine.</p>
+      <p className="note">Sky and fog are what cameras and lidar see in Gazebo and Isaac Sim; MuJoCo only draws them. Wind blows in Gazebo and MuJoCo, not in Isaac.</p>
     </>
   );
 }

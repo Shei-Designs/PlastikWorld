@@ -95,7 +95,7 @@ export function ExportDialog() {
               ))}
             </ul>
             {preview.notes.map((n) => (
-              <p key={n} className="note">
+              <p key={n} className="note warn">
                 {n}
               </p>
             ))}

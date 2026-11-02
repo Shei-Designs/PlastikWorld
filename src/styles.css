@@ -883,13 +883,18 @@ select.select {
   margin-top: 14px;
 }
 
+/* A note explains; it reads as quiet text. Only a caveat (something an engine will not take) gets the amber box. */
 .note {
   margin: 6px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.note.warn {
   padding: 8px 10px;
   border-radius: 7px;
   background: var(--warn-bg);
   color: var(--warn-text);
-  font-size: 12px;
 }
 
 /* ---------- dialogs ---------- */
