@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react';
 import { unzipSync, zipSync } from 'fflate';
 import { APP_NAME, FILE_EXTENSION, isWorldName } from '../app';
 import { gazeboBundle } from '../io/gazebo';
+import { blenderBundle } from '../io/glb';
 import { mujocoBundle } from '../io/mjcf';
 import { isaacBundle } from '../io/usda';
 import { encodeText } from '../io/format';
@@ -1091,7 +1092,7 @@ export const showExport = (open: boolean): void => set({ exporting: open, placin
 
 // --- export ------------------------------------------------------------------------------
 
-const WRITERS: Record<Engine, (world: World, resolved: Resolved) => ExportBundle> = { gazebo: gazeboBundle, mujoco: mujocoBundle, isaac: isaacBundle };
+const WRITERS: Record<Engine, (world: World, resolved: Resolved) => ExportBundle> = { gazebo: gazeboBundle, mujoco: mujocoBundle, isaac: isaacBundle, blender: blenderBundle };
 
 /** The bundle for an engine, with every mesh resolved; what the export dialog previews and writes. */
 export async function buildBundle(engine: Engine): Promise<ExportBundle> {
@@ -1127,7 +1128,18 @@ export async function exportWorld(engine: Engine): Promise<void> {
       for (const file of bundle.files) await platform.writePath(`${folder}/${file.path}`, 'text' in file ? encodeText(file.text) : file.bytes);
       for (const [path, bytes] of packageEntries(bundle)) await platform.writePath(`${folder}/${path}`, bytes);
       set({ exporting: false });
-      tell(bundle.notes.length ? 'info' : 'ok', `${bundle.notes.length ? bundle.notes.join(' ') + ' ' : ''}Written to ${folder}. Run: ${bundle.launch}`, { label: 'Show folder', run: () => void platform.openPath(folder).catch(fail) });
+      const notes = bundle.notes.length ? bundle.notes.join(' ') + ' ' : '';
+      const show = { label: 'Show folder', run: () => void platform.openPath(folder).catch(fail) };
+      if (state.prefs.run && bundle.run) {
+        // Started from the bundle's folder, with its output in launch.log there, so a failure can be read.
+        const program = state.prefs.programs[engine] ?? bundle.run.program;
+        try {
+          await platform.launch(program, bundle.run.args, folder);
+          tell(bundle.notes.length ? 'info' : 'ok', `${notes}Written to ${folder} and started with ${program}; its output goes to launch.log there.`, show);
+        } catch (err) {
+          tell('error', `${notes}Written to ${folder}, but it could not be started: ${err instanceof Error ? err.message : String(err)}`, show);
+        }
+      } else tell(bundle.notes.length ? 'info' : 'ok', `${notes}Written to ${folder}. Run: ${bundle.launch}`, show);
     } else {
       // No folder to write into (a browser, Android): the bundle goes out as a zip.
       const entries: Record<string, Uint8Array> = {};

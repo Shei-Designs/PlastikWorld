@@ -137,6 +137,19 @@ describe('Gazebo', () => {
     expect(text(gazeboBundle(world, resolved), 'Test_Yard.sdf')).not.toContain('WindEffects');
   });
 
+  it('says how the app starts it, and writes a run.sh that goes through ROS 2 when there are robots', () => {
+    // A ROS package robot is spawned by the launch file, so the run needs ros2; a Gazebo model is included and does not.
+    const { world, resolved } = yard('ros');
+    const withRobot = gazeboBundle(world, resolved);
+    expect(withRobot.run).toEqual({ program: 'sh', args: ['run.sh'], needs: ['gz', 'ros2'] });
+    expect(text(withRobot, 'run.sh')).toContain('exec ros2 launch Test_Yard.launch.py');
+    world.objects = world.objects.filter((o) => o.id !== 'r1');
+    const alone = gazeboBundle(world, resolved);
+    expect(alone.run?.needs).toEqual(['gz']);
+    expect(text(alone, 'run.sh')).not.toContain('ros2');
+    expect(text(alone, 'run.sh')).toContain('exec gz sim -r "Test_Yard.sdf"');
+  });
+
   it('warns about a moving mesh on a heightmap', () => {
     const { world, resolved } = yard();
     world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 3, cols: 3, heights: new Float32Array(9).fill(0.5) };

@@ -444,6 +444,66 @@ fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     app.opener().open_url(&url, None::<&str>).map_err(|err| format!("Could not open {url}: {err}"))
 }
 
+/// `~` and `~/` at the front of a path mean the home folder, as a shell would read them.
+fn expand_home(path: &str) -> PathBuf {
+    if path == "~" || path.starts_with("~/") || path.starts_with("~\\") {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            return PathBuf::from(home).join(&path[2.min(path.len())..]);
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// Where a program is: a path (checked as given, `~` expanded), or a name
+/// searched along `path_var` the way a shell searches the PATH, with `.exe`
+/// tried as well on Windows.
+fn find_in(program: &str, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let program = program.trim();
+    if program.is_empty() {
+        return None;
+    }
+    let candidates = |dir: &Path| -> Vec<PathBuf> {
+        let plain = dir.join(program);
+        if cfg!(windows) {
+            vec![plain.clone(), dir.join(format!("{program}.exe"))]
+        } else {
+            vec![plain]
+        }
+    };
+    let is_file = |p: &PathBuf| p.is_file();
+    if program.contains('/') || program.contains('\\') || program.starts_with('~') {
+        let path = expand_home(program);
+        return if path.is_file() { Some(path) } else { None };
+    }
+    let path_var = path_var?;
+    std::env::split_paths(path_var).flat_map(|dir| candidates(&dir)).find(is_file)
+}
+
+/// Where a program is, for the export panel to say whether an engine can be started.
+#[tauri::command]
+fn find_program(program: String) -> Option<String> {
+    find_in(&program, std::env::var_os("PATH").as_deref()).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Starts a program in a folder and leaves it running on its own (its own
+/// process group, so closing the app does not take it down), with its output
+/// in launch.log in that folder, where a failure to start an engine can be read.
+#[tauri::command]
+fn launch_program(program: String, args: Vec<String>, cwd: String) -> Result<u32, String> {
+    let resolved = find_in(&program, std::env::var_os("PATH").as_deref()).ok_or_else(|| format!("{program} was not found on the PATH"))?;
+    let log = fs::File::create(Path::new(&cwd).join("launch.log")).map_err(|err| format!("Could not write launch.log in {cwd}: {err}"))?;
+    let err_log = log.try_clone().map_err(|err| err.to_string())?;
+    let mut command = std::process::Command::new(&resolved);
+    command.args(&args).current_dir(&cwd).stdin(std::process::Stdio::null()).stdout(log).stderr(err_log);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = command.spawn().map_err(|err| format!("Could not start {}: {err}", resolved.display()))?;
+    Ok(child.id())
+}
+
 /// The first argument that names a world, if any: the operating system passes
 /// the path when a `.plastikworld` file is double-clicked.
 fn startup_file_from(args: impl Iterator<Item = OsString>) -> Option<String> {
@@ -484,6 +544,8 @@ pub fn run() {
             default_worlds_dir,
             open_path,
             open_url,
+            find_program,
+            launch_program,
             startup_file
         ])
         .run(tauri::generate_context!())
@@ -558,6 +620,50 @@ mod tests {
         let args = ["--flag", "scene.plastikworld", "other.txt"].into_iter().map(OsString::from);
         assert_eq!(startup_file_from(args), Some("scene.plastikworld".to_owned()));
         assert_eq!(startup_file_from(["notes.txt"].into_iter().map(OsString::from)), None);
+    }
+
+    #[test]
+    fn programs_are_found_on_the_path_or_by_their_own_path() {
+        let dir = TempDir::new();
+        fs::create_dir_all(dir.path("bin")).unwrap();
+        fs::write(dir.path("bin/gz"), b"#!/bin/sh\n").unwrap();
+        let path_var = std::env::join_paths([dir.path("nowhere"), dir.path("bin")]).unwrap();
+        assert_eq!(find_in("gz", Some(path_var.as_os_str())), Some(dir.path("bin/gz")));
+        assert_eq!(find_in("ros2", Some(path_var.as_os_str())), None);
+        assert_eq!(find_in("", Some(path_var.as_os_str())), None);
+        assert_eq!(find_in("gz", None), None);
+        // A path is taken as it is, not searched for.
+        let own = dir.path("bin/gz").to_string_lossy().into_owned();
+        assert_eq!(find_in(&own, None), Some(dir.path("bin/gz")));
+        assert_eq!(find_in(&dir.path("bin/missing").to_string_lossy(), None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_launched_program_runs_in_its_folder_with_its_output_in_the_log() {
+        let dir = TempDir::new();
+        let cwd = dir.0.to_string_lossy().into_owned();
+        let pid = launch_program("sh".into(), vec!["-c".into(), "pwd; echo started >&2".into()], cwd.clone()).unwrap();
+        assert!(pid > 0);
+        // The process runs on its own; give it a moment and read what it wrote.
+        let mut log = String::new();
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            log = fs::read_to_string(dir.path("launch.log")).unwrap_or_default();
+            if log.contains("started") {
+                break;
+            }
+        }
+        assert!(log.contains(&fs::canonicalize(&dir.0).unwrap().to_string_lossy().into_owned()), "{log}");
+        assert!(log.contains("started"), "{log}");
+        assert!(launch_program("no-such-program-here".into(), vec![], cwd).unwrap_err().contains("not found on the PATH"));
+    }
+
+    #[test]
+    fn a_tilde_means_home() {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap();
+        assert_eq!(expand_home("~/isaacsim-env/bin/python"), home.join("isaacsim-env/bin/python"));
+        assert_eq!(expand_home("/usr/bin/python3"), PathBuf::from("/usr/bin/python3"));
     }
 
     #[test]

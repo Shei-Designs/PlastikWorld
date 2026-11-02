@@ -295,12 +295,27 @@ wind that moves in Gazebo and MuJoCo and stays put in Isaac with the note.
 
 ## Phase 10. Release surface (M)
 
-- Launch the simulator from the app on desktop (`gz sim`, the MuJoCo
-  viewer, Isaac through its Python) with the exported bundle.
-- Worlds browser thumbnails (a render of the viewer on save).
-- A GLB of the whole scene for Blender.
-- Android release: signing, Play listing, the feature graphic from the
-  brand script, as PlastikCAD's release notes describe.
+**Done 2026-11-02.**
+
+- Launch from the app, desktop only: every bundle says how it runs
+  (`ExportBundle.run`: a program, its arguments, the other programs it
+  needs on the PATH), the Rust side finds programs and starts one in the
+  bundle's folder in its own process group with its output in `launch.log`,
+  and the export panel offers "Start … after the export" with a field for
+  the Python (MuJoCo, Isaac Sim) or Blender to use and says what was found.
+  Gazebo runs through `run.sh`, which sources the newest ROS under `/opt`
+  when the environment has none and goes through the launch file when there
+  are robots; Isaac gets a `run_isaac.py` that opens the stage and plays.
+  Accepting NVIDIA's EULA stays the user's: Isaac asks on its first run.
+- Worlds browser thumbnails were in from phase 1 (a viewer snapshot on save).
+- A GLB of the whole scene (`io/glb.ts`, written by hand: one buffer, the
+  root node turning Z up to Y up, a material per node, vertex colours kept).
+  Blender is a fourth export target, with "Start Blender" importing it.
+  `pnpm smoke:blender` imports the sample worlds into a headless Blender and
+  finds every prop back at its place.
+- Android release: `docs/release.md` (the key and its properties file, the
+  version in three places, the signed bundle, the Play listing texts and
+  graphics); `pnpm brand` now draws the feature graphic and the 512 icon.
 
 ## Parked
 

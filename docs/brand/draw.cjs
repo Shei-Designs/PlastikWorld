@@ -100,4 +100,36 @@ const banner = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" r
 </svg>
 `;
 fs.writeFileSync(path.join(root, 'docs/banner.svg'), banner);
-console.log('name width', name.width.toFixed(0), 'meta width', meta.width.toFixed(0), 'shei x', sheiX.toFixed(0));
+// --- the Play Store: the feature graphic, 1024 x 500, Carbon with the lockup centred; the 512 icon is the tile -----
+const fgTile = 180, fgGap = 54;
+const fgName = text(grotesk, 'PlastikWorld', 0, 0, 61);
+const fgLine = text(inter400, 'Build worlds for robot simulation.', 0, 0, 27);
+const fgMeta = text(mono, 'gazebo sdf · mujoco mjcf · isaac usd', 0, 0, 15);
+const fgWidth = fgTile + fgGap + Math.max(fgName.width, fgLine.width, fgMeta.width);
+const fgX = (1024 - fgWidth) / 2, fgY = 160, fgTextX = fgX + fgTile + fgGap;
+const fgSheiX = 1024 - 40 - 14 - shei.width;
+const feature = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500" role="img" aria-labelledby="t">
+  <title id="t">PlastikWorld: build worlds for robot simulation. A Shei Designs project.</title>
+  <rect width="1024" height="500" fill="${CARBON}"/>
+  <g transform="translate(${fgX.toFixed(1)} ${fgY}) scale(${fgTile / 100})"><path d="${TILE}" fill="${GREEN}"/>${mark(64)}</g>
+  <path d="${text(grotesk, 'PlastikWorld', fgTextX, fgY + 83, 61).d}" fill="${LINEN}"/>
+  <path d="${text(inter400, 'Build worlds for robot simulation.', fgTextX + 2, fgY + 131, 27).d}" fill="${LINEN}" opacity="0.86"/>
+  <path d="${text(mono, 'gazebo sdf · mujoco mjcf · isaac usd', fgTextX + 4, fgY + 175, 15).d}" fill="${DUST}"/>
+  <path d="${text(inter800, 'Shei Designs', fgSheiX, 458, 22, { tracking: -0.02 }).d}" fill="${LINEN}"/>
+  <circle cx="${(fgSheiX + shei.width + 8).toFixed(1)}" cy="454" r="4" fill="${TAPE}"/>
+</svg>
+`;
+fs.writeFileSync(path.join(root, 'docs/brand/feature-graphic.svg'), feature);
+// The PNGs the stores take, through rsvg-convert when it is installed (the README says so for the icons too).
+const { execFileSync } = require('child_process');
+const png = (from, to, width, height) => {
+  try {
+    execFileSync('rsvg-convert', ['-w', String(width), '-h', String(height), '-o', path.join(root, to), path.join(root, from)], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+};
+const rasterized = png('docs/brand/feature-graphic.svg', 'docs/brand/feature-graphic.png', 1024, 500) && png('docs/brand/icon.svg', 'docs/brand/play-icon-512.png', 512, 512);
+if (!rasterized) console.log('rsvg-convert not found: the Play Store PNGs (feature-graphic.png, play-icon-512.png) were not drawn');
+console.log('name width', name.width.toFixed(0), 'meta width', meta.width.toFixed(0), 'shei x', sheiX.toFixed(0), 'feature lockup width', fgWidth.toFixed(0));

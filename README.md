@@ -67,7 +67,13 @@ the toolbar.
 - **Terrain** is a flat plane or a heightmap (a grid of heights); lights are
   suns, points and spots; spawn points are named poses.
 - **Export** writes a self-contained folder for the engine of your choice,
-  meshes and robot packages copied in, with a `run.sh` that launches it.
+  meshes and robot packages copied in, with a `run.sh` that launches it. On
+  the desktop the export panel can start the engine as well: `gz sim` (or the
+  ROS 2 launch file when there are robots), MuJoCo's viewer or Isaac Sim
+  through the Python that has them (pointed at a venv in the panel), Blender
+  with the scene imported. The engine runs on its own, with its output in
+  `launch.log` beside the files. A fourth target writes the whole scene as one
+  GLB for Blender.
 
 Everything in the world file is SI: meters, kilograms, radians, Z up. The
 file (`.plastikworld`) is small JSON: assets by path, placed objects with poses
@@ -79,6 +85,7 @@ translation.
 | Gazebo (Harmonic+, `gz sim`) | An SDF world with the physics, sensor, IMU and contact systems; the ground as a plane or a `<heightmap>` from a 16-bit PNG written beside it; props as static or free `<model>`s with mesh or box collisions and surface friction; Gazebo-model robots `<include>`d by `model://` URI at their pose; ROS-package robots spawned at their pose from a `ros2 launch` file with `ros_gz_sim create`. |
 | MuJoCo | An MJCF with the ground as a plane or an `hfield` (heights inline); props as bodies with mesh geoms, an OBJ per asset (MuJoCo reads no GLB), free ones with a `freejoint` and mass; each robot brought in with `<attach>` from its own model file, so its actuators and sensors come along and its stand-in floor does not. |
 | Isaac Sim | A USDA stage (text USD, no library needed) with a `PhysicsScene`, the ground as a collision mesh, `DistantLight` and `SphereLight`s, props as meshes with collision (rigid bodies with mass when free), and each robot referenced from the USD stage its PlastikCAD package carries under `isaac/`. |
+| Blender | One GLB of the scene (Y up, as glTF wants, turned back on import): the ground, the surface zones as coloured patches, every prop as a mesh at its pose with its colours. Robots stay in their packages and are noted; lights, sky, fog and wind are Blender's own. |
 
 Terrain is one source with three writers: Gazebo wants an image on disk,
 MuJoCo wants the heights inline, Isaac wants a mesh.
@@ -224,6 +231,7 @@ and on the ground, and climb the hill it starts on:
 pnpm smoke:gazebo   # Gazebo Harmonic + ROS 2 Jazzy in Docker (PlastikCAD's image; built if missing)
 pnpm smoke:mujoco   # needs the mujoco package: MUJOCO_PYTHON=~/venv/bin/python, or python3
 pnpm smoke:isaac    # pxr checks, then a headless play in Isaac Sim (ISAACSIM_PYTHON, default ~/isaacsim-env/bin/python)
+pnpm smoke:blender  # imports each scene GLB into a headless Blender and finds every prop back at its place
 ```
 
 ```sh
@@ -236,6 +244,8 @@ environment and the four Rust Android targets installed, as for PlastikCAD.
 Release builds are signed with the key named in
 `~/.android/plastikworld-keystore.properties` (never in the repository); without
 it the APK is left unsigned. CI builds a debug APK on every push.
+[docs/release.md](docs/release.md) walks through a release: the key, the
+version, the bundle, and the Play listing with its texts and graphics.
 
 The Isaac play starts Omniverse Kit, which asks for NVIDIA's EULA the first
 time. Accepting it is your call, so the script does not do it for you: run
@@ -259,8 +269,10 @@ rounded tile in the app's own Terrain green (`#19DC5A`, the widest free gap on
 the product colour wheel, between Plot lime and Filament teal), a placement
 pin standing on a plot of ground in Carbon, the pin's eye as the one cutout,
 and the product name in Space Grotesk. `docs/brand/draw.cjs` draws them
-(`pnpm brand`) into `docs/brand/`, `public/icon.svg` and `docs/banner.svg`;
-after a change, rasterize the tile at 1024 px (`rsvg-convert`) and regenerate
+(`pnpm brand`) into `docs/brand/`, `public/icon.svg` and `docs/banner.svg`,
+and the Play Store's feature graphic (1024 × 500, the lockup on Carbon) and
+512 px icon as PNGs through `rsvg-convert` when it is installed; after a
+change, rasterize the tile at 1024 px (`rsvg-convert`) and regenerate
 the platform icons with `pnpm tauri icon docs/brand/icon.json`. In the app the
 surfaces are tinted a few percent toward the green, the green marks what is
 selected or active, and Tape orange stays the house signal for the primary
@@ -330,8 +342,11 @@ exports with a note in the other two, the way robot package clashes do now.
 6. **Sky, lighting, fog and wind.** Done: sky presets, linear fog and a
    wind vector, written for Gazebo and MuJoCo, with a dome light and a note
    for Isaac.
-7. Launch the simulator from the app; a worlds browser with thumbnails;
-   Android through `platform.ts`; a GLB of the whole scene for Blender.
+7. **Release surface.** Done: the export panel starts the engine (or
+   Blender) on the desktop, the worlds browser shows each world's picture,
+   the scene exports as one GLB for Blender, and `docs/release.md` carries
+   the Android release and Play listing. Still to come: Drive sync and the
+   touch entry sheet from PlastikCAD.
 
 Parked: rain and snow (no engine has them) and water (Gazebo alone, through
 its buoyancy and hydrodynamics plugins), as a later opt-in with notes.

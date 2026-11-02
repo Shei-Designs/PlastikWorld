@@ -953,6 +953,10 @@ dialog.sheet::backdrop {
   color: var(--muted);
 }
 
+.run-after {
+  margin-top: 12px;
+}
+
 .launch {
   padding: 8px 10px;
   border-radius: 7px;

@@ -1,22 +1,45 @@
 // Export: pick the engine, see what will be written, write it.
 import { useEffect, useRef, useState } from 'react';
 import type { ExportBundle } from '../io/export';
+import * as platform from '../platform';
 import type { Engine } from '../state/persist';
 import { buildBundle, exportWorld, setPrefs, showExport, useEditor } from '../state/store';
+import { CheckField, TextField } from './Fields';
 
 const ENGINES: { id: Engine; label: string; note: string }[] = [
   { id: 'gazebo', label: 'Gazebo', note: 'An SDF world with the physics and sensor systems, the ground, the props as models, and the robots included or spawned from a ROS 2 launch file.' },
   { id: 'mujoco', label: 'MuJoCo', note: 'An MJCF with the ground as a plane or hfield, the props as mesh bodies (OBJ), and each robot attached from its own model file.' },
   { id: 'isaac', label: 'Isaac Sim', note: 'A USDA stage with a physics scene, the ground and props as collision meshes, lights, and each robot referenced from the USD its package carries.' },
+  { id: 'blender', label: 'Blender', note: 'One GLB of the scene for Blender or any glTF reader: the ground, the surface zones and every prop at its pose. Robots stay in their packages.' },
 ];
+
+/** What the program field is called, per engine; Gazebo runs through its run.sh and has none. */
+const PROGRAM_LABEL: Partial<Record<Engine, string>> = { mujoco: 'Python with mujoco', isaac: 'Python with Isaac Sim', blender: 'Blender' };
 
 export function ExportDialog() {
   const open = useEditor((s) => s.exporting);
   const engine = useEditor((s) => s.prefs.engine);
   const world = useEditor((s) => s.world);
   const busy = useEditor((s) => s.busy);
+  const run = useEditor((s) => s.prefs.run);
+  const programs = useEditor((s) => s.prefs.programs);
   const dialog = useRef<HTMLDialogElement>(null);
   const [preview, setPreview] = useState<ExportBundle | null>(null);
+  // Where each program the run needs was found, by name; null for not found.
+  const [found, setFound] = useState<Record<string, string | null>>({});
+  const desktop = platform.isDesktop();
+  const program = programs[engine] ?? preview?.run?.program ?? '';
+  const needed = preview?.run ? [program, ...preview.run.needs] : [];
+  useEffect(() => {
+    if (!open || !desktop || !needed.length) return;
+    let live = true;
+    Promise.all(needed.map((name) => platform.findProgram(name).catch(() => null))).then((paths) => live && setFound(Object.fromEntries(needed.map((name, i) => [name, paths[i]]))));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, desktop, needed.join('\0')]);
+  const missing = needed.filter((name) => found[name] === null);
   useEffect(() => {
     const d = dialog.current;
     if (!d) return;
@@ -77,6 +100,13 @@ export function ExportDialog() {
               </p>
             ))}
             <div className="launch">{preview.launch}</div>
+            {desktop && preview.run && (
+              <div className="run-after">
+                <CheckField label={`Start ${chosen.label} after the export`} value={run} onChange={(v) => setPrefs({ run: v })} />
+                {PROGRAM_LABEL[engine] && <TextField label={PROGRAM_LABEL[engine]!} value={program} onChange={(v) => setPrefs({ programs: { ...programs, [engine]: v } })} />}
+                <p className="note">{needed.map((name) => (found[name] === undefined ? `${name}: looking…` : found[name] ? `${name}: ${found[name]}` : `${name}: not found on the PATH`)).join(' · ')}</p>
+              </div>
+            )}
           </>
         )}
         <div className="sheet-buttons">
@@ -84,7 +114,7 @@ export function ExportDialog() {
             Cancel
           </button>
           <button type="button" className="primary" disabled={!preview || busy !== null} onClick={() => void exportWorld(engine)}>
-            Export…
+            {desktop && run && preview?.run && !missing.length ? 'Export and start…' : 'Export…'}
           </button>
         </div>
       </div>

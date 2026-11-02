@@ -188,6 +188,6 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
   ].join('\n');
   const file = `${modelName}.xml`;
   files.push({ path: file, text: xml });
-  files.push({ path: 'run.sh', text: `#!/bin/sh\n# Opens the world in MuJoCo's viewer (pip install mujoco).\ncd "$(dirname "$0")"\npython3 -m mujoco.viewer --mjcf "${file}"\n` });
-  return { name, files, copies, notes, launch: `cd ${name} && python3 -m mujoco.viewer --mjcf ${file}` };
+  files.push({ path: 'run.sh', text: `#!/bin/sh\n# Opens the world in MuJoCo's viewer (pip install mujoco; MUJOCO_PYTHON names the Python that has it).\ncd "$(dirname "$0")"\n"\${MUJOCO_PYTHON:-python3}" -m mujoco.viewer --mjcf "${file}"\n` });
+  return { name, files, copies, notes, launch: `cd ${name} && python3 -m mujoco.viewer --mjcf ${file}`, run: { program: 'python3', args: ['-m', 'mujoco.viewer', '--mjcf', file], needs: [] } };
 }

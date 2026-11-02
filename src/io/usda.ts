@@ -5,11 +5,11 @@
 // package carries (Isaac's URDF importer wrote it).
 import { degrees } from '../model/math';
 import { assetOf, assetPresent, isProp, skyOf } from '../model/types';
-import type { Light, Placed, Pose, Terrain, Vec3, World } from '../model/types';
+import type { Light, Placed, Pose, Vec3, World } from '../model/types';
 import { bundleName, claimFolder, fmt } from './export';
 import type { ExportBundle, ExportFile, MeshData, Resolved } from './export';
 import { identifier } from './format';
-import { ZONE_LIFT, placedZones, zoneMesh } from './zones';
+import { ZONE_LIFT, groundMesh, placedZones, zoneMesh } from './zones';
 
 const tuple = (v: Vec3, decimals = 6): string => `(${v.map((x) => fmt(x, decimals)).join(', ')})`;
 
@@ -118,40 +118,33 @@ function groundPrims(world: World): string[] {
   return [`    def Scope "PhysicsMaterials"\n    {\n${materials.join('\n\n')}\n    }`, ground, ...patches, ...cubes];
 }
 
-/** The ground as a mesh: one quad for a plane, a grid for a heightmap. */
-function groundMesh(terrain: Terrain): MeshData {
-  const [sx, sy] = terrain.size;
-  if (terrain.kind === 'plane') {
-    return {
-      positions: new Float32Array([-sx / 2, -sy / 2, 0, sx / 2, -sy / 2, 0, sx / 2, sy / 2, 0, -sx / 2, sy / 2, 0]),
-      indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
-      colors: null,
-    };
-  }
-  const { rows, cols, heights } = terrain;
-  const positions = new Float32Array(rows * cols * 3);
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const i = (r * cols + c) * 3;
-      positions[i] = (c / (cols - 1) - 0.5) * sx;
-      positions[i + 1] = (r / (rows - 1) - 0.5) * sy;
-      positions[i + 2] = heights[r * cols + c];
-    }
-  }
-  const indices = new Uint32Array((rows - 1) * (cols - 1) * 6);
-  let k = 0;
-  for (let r = 0; r < rows - 1; r++) {
-    for (let c = 0; c < cols - 1; c++) {
-      const a = r * cols + c, b = a + 1, d = a + cols, e = d + 1;
-      indices[k++] = a;
-      indices[k++] = b;
-      indices[k++] = e;
-      indices[k++] = a;
-      indices[k++] = e;
-      indices[k++] = d;
-    }
-  }
-  return { positions, indices, colors: null };
+/**
+ * The script that opens the stage in Isaac Sim and presses play, for Isaac
+ * Sim's own Python (the `isaacsim` package in a venv, or the Kit install's
+ * python.sh); what the smoke test does, with the window up. Accepting
+ * NVIDIA's EULA is the user's: the first run asks.
+ */
+function runIsaacPy(file: string): string {
+  return [
+    '# Opens the stage in Isaac Sim and plays it. Run with the Python that has Isaac Sim:',
+    '#   ~/isaacsim-env/bin/python run_isaac.py      (pip install "isaacsim[all]" in a venv)',
+    '#   <isaac-sim>/python.sh run_isaac.py          (the Kit install)',
+    'import os',
+    '',
+    'from isaacsim import SimulationApp',
+    '',
+    "app = SimulationApp({'headless': False})",
+    '# Only after the app is up: Kit loads its own USD and omni modules.',
+    'import omni.timeline',
+    'from isaacsim.core.utils import stage as stage_utils',
+    '',
+    `stage_utils.open_stage(os.path.abspath(${JSON.stringify(file)}))`,
+    'omni.timeline.get_timeline_interface().play()',
+    'while app.is_running():',
+    '    app.update()',
+    'app.close()',
+    '',
+  ].join('\n');
 }
 
 function lightPrim(light: Light): string {
@@ -296,5 +289,6 @@ ${prims.join('\n\n')}
 `;
   const file = `${stageName}.usda`;
   files.push({ path: file, text: usda });
-  return { name, files, copies, notes, launch: `Open ${name}/${file} in Isaac Sim (File > Open), or reference it from a stage.` };
+  files.push({ path: 'run_isaac.py', text: runIsaacPy(file) });
+  return { name, files, copies, notes, launch: `Open ${name}/${file} in Isaac Sim (File > Open), or reference it from a stage.`, run: { program: 'python3', args: ['run_isaac.py'], needs: [] } };
 }

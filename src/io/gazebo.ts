@@ -168,6 +168,32 @@ function propXml(placed: Placed, resolved: Resolved, meshFile: string, wind = fa
   ].join('\n');
 }
 
+/**
+ * The script that runs the bundle, which the app starts too. With robots the
+ * world goes through the launch file, which needs ROS 2 in the environment:
+ * when it is not, the newest ROS under /opt is sourced, as the app's own
+ * environment rarely has it. Without, gz sim alone.
+ */
+function runSh(worldFile: string, withRobots: boolean): string {
+  const launch = worldFile.replace(/\.sdf$/, '.launch.py');
+  return [
+    '#!/bin/bash',
+    '# Runs the world in Gazebo. Meshes are found beside the world file, robots under models/.',
+    'cd "$(dirname "$0")"',
+    ...(withRobots
+      ? [
+          'if [ -z "$ROS_DISTRO" ]; then',
+          '  for setup in /opt/ros/*/setup.bash; do [ -f "$setup" ] && . "$setup"; done',
+          'fi',
+          `if command -v ros2 >/dev/null 2>&1; then exec ros2 launch ${launch}; fi`,
+          'echo "ros2 not found: starting Gazebo without the ROS robots" >&2',
+        ]
+      : []),
+    `GZ_SIM_RESOURCE_PATH="$PWD/models:$GZ_SIM_RESOURCE_PATH" exec gz sim -r "${worldFile}"`,
+    '',
+  ].join('\n');
+}
+
 /** The inertia of a solid box about its centre, as SDF wants it. */
 function boxInertia(mass: number, [x, y, z]: [number, number, number]): string {
   const k = mass / 12;
@@ -363,10 +389,7 @@ ${[...props, ...includes].join('\n')}
   const worldFile = `${worldName}.sdf`;
   files.push({ path: worldFile, text: sdf });
   if (robots.length) files.push({ path: `${worldName}.launch.py`, text: launchPy(worldFile, robots) });
-  files.push({
-    path: 'run.sh',
-    text: `#!/bin/sh\n# Runs the world in Gazebo. Meshes are found beside the world file, robots under models/.\ncd "$(dirname "$0")"\nGZ_SIM_RESOURCE_PATH="$PWD/models:$GZ_SIM_RESOURCE_PATH" gz sim -r "${worldFile}"\n`,
-  });
+  files.push({ path: 'run.sh', text: runSh(worldFile, robots.length > 0) });
   const launch = robots.length ? `cd ${name} && ros2 launch ${worldName}.launch.py` : `cd ${name} && GZ_SIM_RESOURCE_PATH=$PWD/models gz sim -r ${worldFile}`;
-  return { name, files, copies, notes, launch };
+  return { name, files, copies, notes, launch, run: { program: 'sh', args: ['run.sh'], needs: ['gz', ...(robots.length ? ['ros2'] : [])] } };
 }

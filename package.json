@@ -16,6 +16,7 @@
     "smoke:gazebo": "pnpm smoke:fixtures && tools/gazebo_smoke.sh fixtures/out/gazebo",
     "smoke:mujoco": "pnpm smoke:fixtures && ${MUJOCO_PYTHON:-python3} tools/mujoco_smoke.py fixtures/out/mujoco",
     "smoke:isaac": "pnpm smoke:fixtures && ${ISAACSIM_PYTHON:-$HOME/isaacsim-env/bin/python} tools/isaac_smoke.py fixtures/out/isaac",
+    "smoke:blender": "pnpm smoke:fixtures && ${BLENDER:-blender} -b --python tools/blender_smoke.py -- fixtures/out/blender",
     "tauri": "tauri"
   },
   "dependencies": {

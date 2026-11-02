@@ -278,6 +278,17 @@ export async function pickExportFolder(): Promise<string | null> {
   return typeof picked === 'string' ? picked : null;
 }
 
+/** Desktop only: where a program is (a name searched on the PATH, or a path, `~` allowed), or null when it is not there. */
+export async function findProgram(program: string): Promise<string | null> {
+  if (!isDesktop()) return null;
+  return command<string | null>('find_program', { program });
+}
+
+/** Desktop only: starts a program in a folder and leaves it running; its output goes to launch.log in that folder. */
+export async function launch(program: string, args: string[], cwd: string): Promise<void> {
+  await command<number>('launch_program', { program, args, cwd });
+}
+
 /** Desktop only: shows a file or folder in the system file manager. */
 export async function openPath(path: string): Promise<void> {
   await command<void>('open_path', { path });

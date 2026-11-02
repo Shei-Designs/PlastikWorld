@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { emptyWorld, isProp } from '../model/types';
+import { assetOf, emptyWorld, isProp } from '../model/types';
 import type { Asset, PartAsset, Placed, RobotFormat, Terrain, Vec3, World } from '../model/types';
 import { buildPart, partById, settle } from '../parts/library';
 import { serializeWorld } from '../model/file';
@@ -24,6 +24,7 @@ import { heightAt, rollingField } from './heightmap';
 import { dab } from '../terrain/brush';
 import { mujocoBundle } from './mjcf';
 import { isaacBundle } from './usda';
+import { blenderBundle } from './glb';
 
 const OUT = process.env.WORLD_FIXTURES_OUT ? resolve(process.env.WORLD_FIXTURES_OUT) : null;
 const ROBOTS = resolve(process.env.ROBOT_FIXTURES ?? '../Quick_CAD/fixtures/out');
@@ -482,6 +483,8 @@ describe('sample worlds', () => {
       const gazebo = gazeboBundle(world, resolved);
       const mujoco = mujocoBundle(world, resolved);
       const isaac = isaacBundle(world, resolved);
+      const blender = blenderBundle(world, resolved);
+      expect(blender.notes.filter((n) => !/robots are left out|Lights, sky, fog and wind/.test(n))).toEqual([]);
       // Each engine takes the props and the robots it can read, and says why it left the others out.
       expect(gazebo.notes.filter((n) => !/MuJoCo model cannot/.test(n) && !/also named reference_rover/.test(n) && !/drops the friction set on a mesh/.test(n))).toEqual([]);
       for (const bundle of [gazebo, mujoco, isaac]) expect(bundle.notes.filter((n) => /^Gazebo may never settle/.test(n))).toEqual([]);
@@ -500,6 +503,12 @@ describe('sample worlds', () => {
       writeBundle('gazebo', world, gazebo, expectations(world, gazebo, mainFile(gazebo, '.sdf'), resolved));
       writeBundle('mujoco', world, mujoco, expectations(world, mujoco, mainFile(mujoco, '.xml'), resolved));
       writeBundle('isaac', world, isaac, expectations(world, isaac, mainFile(isaac, '.usda'), resolved));
+      // The Blender check imports the GLB and looks for each prop at its place, Z up again.
+      mkdirSync(join(OUT, 'blender'), { recursive: true });
+      const glb = blender.files[0];
+      if ('bytes' in glb) writeFileSync(join(OUT, 'blender', glb.path), glb.bytes);
+      const props = world.objects.filter((o) => isProp(assetOf(world, o)!)).map((o) => ({ name: o.name, xyz: o.pose.xyz }));
+      writeFileSync(join(OUT, 'blender', `${blender.name}.smoke.json`), JSON.stringify({ props, zones: world.zones.map((z) => z.name) }, null, 2));
     }
     if (OUT) console.log(`sample worlds written under ${OUT} (${robots.length} robot${robots.length === 1 ? '' : 's'} from ${ROBOTS})`);
   });

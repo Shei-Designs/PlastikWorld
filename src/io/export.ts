@@ -59,6 +59,12 @@ export interface ExportBundle {
   notes: string[];
   /** How to run it, shown after the export. */
   launch: string;
+  /**
+   * How the desktop app starts it, from the bundle's folder: a program (which
+   * the user may point elsewhere, a venv's Python say), its arguments, and
+   * any other programs the run needs on the PATH, checked before offering it.
+   */
+  run?: { program: string; args: string[]; needs: string[] };
 }
 
 /**

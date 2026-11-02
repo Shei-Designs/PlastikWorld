@@ -95,3 +95,39 @@ export function placedZones(world: World): { zone: Zone; material: Material; rec
   }
   return out;
 }
+
+/** The ground as a mesh: one quad for a plane, a grid for a heightmap. */
+export function groundMesh(terrain: Terrain): MeshData {
+  const [sx, sy] = terrain.size;
+  if (terrain.kind === 'plane') {
+    return {
+      positions: new Float32Array([-sx / 2, -sy / 2, 0, sx / 2, -sy / 2, 0, sx / 2, sy / 2, 0, -sx / 2, sy / 2, 0]),
+      indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+      colors: null,
+    };
+  }
+  const { rows, cols, heights } = terrain;
+  const positions = new Float32Array(rows * cols * 3);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const i = (r * cols + c) * 3;
+      positions[i] = (c / (cols - 1) - 0.5) * sx;
+      positions[i + 1] = (r / (rows - 1) - 0.5) * sy;
+      positions[i + 2] = heights[r * cols + c];
+    }
+  }
+  const indices = new Uint32Array((rows - 1) * (cols - 1) * 6);
+  let k = 0;
+  for (let r = 0; r < rows - 1; r++) {
+    for (let c = 0; c < cols - 1; c++) {
+      const a = r * cols + c, b = a + 1, d = a + cols, e = d + 1;
+      indices[k++] = a;
+      indices[k++] = b;
+      indices[k++] = e;
+      indices[k++] = a;
+      indices[k++] = e;
+      indices[k++] = d;
+    }
+  }
+  return { positions, indices, colors: null };
+}
