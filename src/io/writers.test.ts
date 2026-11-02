@@ -27,7 +27,7 @@ function yard(robotFormat: 'ros' | 'gazebo' | 'mujoco' = 'gazebo'): { world: Wor
   world.assets.push({ kind: 'mesh', id: 'crate', name: 'Crate', source: { name: 'Crate.glb', path: '/tmp/Crate.glb', size: 4 }, data: cube.glb! });
   const entry = robotFormat === 'ros' ? 'urdf/reference_rover.urdf' : robotFormat === 'gazebo' ? 'model.sdf' : 'reference_rover.xml';
   world.assets.push({ kind: 'robot', id: 'rover', name: 'rover', format: robotFormat, source: { name: 'reference_rover', path: '/tmp/reference_rover', size: 0 }, modelName: 'reference_rover', entry, rootBody: 'Body', usd: 'isaac/reference_rover/reference_rover.usda', files: { [entry]: new Uint8Array([60]) } });
-  world.objects.push({ id: 'o1', name: 'Crate 1', asset: 'crate', pose: { xyz: [2, 1, 0], rpy: [0, 0, Math.PI / 2] }, scale: 1, physics: { static: true, mass: 1, friction: 0.7, collision: 'mesh' } });
+  world.objects.push({ id: 'o1', name: 'Crate 1', asset: 'crate', pose: { xyz: [2, 1, 0], rpy: [0, 0, Math.PI / 2] }, scale: 1, physics: { static: true, mass: 1, friction: 0.8, collision: 'mesh' } });
   world.objects.push({ id: 'o2', name: 'Loose crate', asset: 'crate', pose: { xyz: [3, 1, 0.5], rpy: [0, 0, 0] }, scale: 0.5, physics: { static: false, mass: 2.5, friction: 0.7, collision: 'box' } });
   world.objects.push({ id: 'r1', name: 'Rover', asset: 'rover', pose: { xyz: [0, 0, 0.05], rpy: [0, 0, 1] }, scale: 1, physics: { static: false, mass: 1, friction: 0.8, collision: 'mesh' } });
   world.spawns.push({ id: 's1', name: 'Start', pose: { xyz: [0, 0, 0], rpy: [0, 0, 0] } });
@@ -107,13 +107,16 @@ describe('Gazebo', () => {
     // The loose crate has friction 0.7: DART drops a mesh's friction, so the ice would not slow it, and the note says so.
     expect(bundle.notes).toEqual([expect.stringMatching(/Rink: Gazebo drops the friction set on a mesh/)]);
     // A heightmap's own friction is dropped too, and a loose mesh-collision prop's; a plane's and a box's count.
+    // A fixed mesh prop is mentioned only when its friction was set away from the default.
     world.terrain.friction = 0.4;
     world.objects[1].physics.collision = 'mesh';
+    world.objects[0].physics.friction = 0.3;
     const more = gazeboBundle(world, resolved).notes;
     expect(more.filter((n) => /Terrain: Gazebo drops the friction set on a heightmap/.test(n))).toHaveLength(1);
-    expect(more.filter((n) => /Loose crate: Gazebo drops the friction set on a mesh collision/.test(n))).toHaveLength(1);
+    expect(more.filter((n) => /Crate 1, Loose crate: Gazebo drops the friction set on a mesh collision/.test(n))).toHaveLength(1);
     world.terrain.friction = 1;
     world.objects[1].physics.collision = 'box';
+    world.objects[0].physics.friction = 0.8;
     // On a plane the zone is a thin box instead.
     world.terrain = { kind: 'plane', size: [10, 10], friction: 1 };
     expect(text(gazeboBundle(world, resolved), 'Test_Yard.sdf')).toContain('<box><size>5 2.5 0.02</size></box>');
@@ -161,7 +164,7 @@ describe('MuJoCo', () => {
     expect(xml).toContain('<geom name="floor" type="plane" size="10 10 0.1"');
     expect(xml).toContain('<mesh name="Crate" file="Crate.obj"/>');
     expect(xml).toContain('<mesh name="Crate_Loose_crate" file="Crate.obj" scale="0.5 0.5 0.5"/>');
-    expect(xml).toMatch(/<body name="Crate_1" pos="2 1 0" quat="0.707107 0 0 0.707107">\s*<geom type="mesh" mesh="Crate" friction="0.7 0.005 0.0001"\/>/);
+    expect(xml).toMatch(/<body name="Crate_1" pos="2 1 0" quat="0.707107 0 0 0.707107">\s*<geom type="mesh" mesh="Crate" friction="0.8 0.005 0.0001"\/>/);
     expect(xml).toContain('<freejoint name="Loose_crate_free"/>');
     expect(xml).toContain('<geom type="box" pos="0.25 0.25 0.25" size="0.25 0.25 0.25"');
     expect(xml).toContain('mass="2.5"');

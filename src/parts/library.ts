@@ -51,7 +51,9 @@ const C = {
 };
 
 const fixed: Physics = { static: true, mass: 1, friction: 0.8, collision: 'mesh' };
-const loose = (mass: number, friction = 0.6): Physics => ({ static: false, mass, friction, collision: 'mesh' });
+// A loose part collides as its box: Gazebo's DART drops the friction set on a mesh and rocks a moving mesh on a
+// heightmap, and a box is what a crate, a pallet or a cone needs to slide, stack and be pushed about.
+const loose = (mass: number, friction = 0.6): Physics => ({ static: false, mass, friction, collision: 'box' });
 const p = (id: string, label: string, value: number, min: number, max: number, step: number, unit = 'm'): ParamSpec => ({ id, label, unit, min, max, step, value });
 
 export const PARTS: PartDef[] = [

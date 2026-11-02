@@ -18,7 +18,7 @@ import { placedZones, zoneMesh } from './zones';
  * the heightmap's contacts under it.
  */
 const GAZEBO_ZONE_LIFT = 0.01;
-import { assetOf, assetPresent, isProp, skyOf } from '../model/types';
+import { assetOf, assetPresent, DEFAULT_PHYSICS, isProp, skyOf } from '../model/types';
 import type { Light, Placed, Pose, RobotAsset, World } from '../model/types';
 
 const poseXml = (pose: Pose): string => `<pose>${vec(pose.xyz)} ${vec(pose.rpy)}</pose>`;
@@ -288,8 +288,14 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
     }
     if (Math.abs(world.terrain.friction - 1) > 1e-6) notes.push(`Terrain: Gazebo drops the friction set on a heightmap, so its ${world.terrain.friction} does not act: a body meets the ground with its own friction.`);
   }
-  // Only the free ones: whether a loose prop slides is what its friction decides, and nearly every fixed prop is a mesh.
-  const meshy = world.objects.filter((o) => !o.physics.static && o.physics.collision === 'mesh' && Math.abs(o.physics.friction - 1) > 1e-6 && assetOf(world, o) && isProp(assetOf(world, o)!));
+  // Every loose one, since whether it slides is what its friction decides; of the fixed ones, which are nearly all
+  // meshes, only those whose friction was set away from the default (an icy ramp), or every export would say it.
+  const meshy = world.objects.filter((o) => {
+    if (o.physics.collision !== 'mesh') return false;
+    const asset = assetOf(world, o);
+    if (!asset || !isProp(asset)) return false;
+    return Math.abs(o.physics.friction - (o.physics.static ? DEFAULT_PHYSICS.friction : 1)) > 1e-6;
+  });
   if (meshy.length) notes.push(`${meshy.map((o) => o.name).join(', ')}: Gazebo drops the friction set on a mesh collision, so what ${meshy.length === 1 ? 'it touches' : 'they touch'} sets the friction; use a box collision where friction matters.`);
   const robots: { placed: Placed; asset: RobotAsset; folder: string }[] = [];
   const includes: string[] = [];

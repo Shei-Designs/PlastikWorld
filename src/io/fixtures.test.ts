@@ -390,9 +390,9 @@ function rooms(robots: Asset[], resolved: Resolved): World {
     { id: 'ramp1', name: 'Ramp', asset: 'ramp', pose: pose(6, -6), scale: 1, physics: fixed(false) },
     { id: 'stairs1', name: 'Stairs', asset: 'stairs', pose: pose(-7, -6), scale: 1, physics: fixed(false) },
     { id: 'barrier1', name: 'Barrier', asset: 'barrier', pose: pose(0, 7, 0, 0.3), scale: 1, physics: fixed(false) },
-    { id: 'cone1', name: 'Cone', asset: 'cone', pose: pose(6, 4, 0.02), scale: 1, physics: fixed(true, 2) },
+    { id: 'cone1', name: 'Cone', asset: 'cone', pose: pose(6, 4, 0.02), scale: 1, physics: physics(true, 'box', 2) },
     // On the room's slab, which is 0.05 m thick.
-    { id: 'box1', name: 'Box', asset: 'box', pose: pose(-1.5, 1.5, 0.07), scale: 1, physics: fixed(true, 5) },
+    { id: 'box1', name: 'Box', asset: 'box', pose: pose(-1.5, 1.5, 0.07), scale: 1, physics: physics(true, 'box', 5) },
   );
   for (const rover of ROVERS) {
     const asset = robots.find((r) => r.id === rover.id);
