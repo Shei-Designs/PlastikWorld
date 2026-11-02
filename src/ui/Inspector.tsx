@@ -3,9 +3,11 @@ import { heightAt, range, resample } from '../io/heightmap';
 import { BRUSH_KINDS, DEFAULT_BRUSH, DEFAULT_FIELD, FIELD_KINDS } from '../terrain/brush';
 import type { FieldSpec } from '../terrain/brush';
 import { partById } from '../parts/library';
+import { DRIVE_MODELS } from '../drive/kinematics';
+import { viewerRef } from './Viewport';
 import { GRID_MAX, GRID_SIZES, MATERIAL_PRESETS, assetOf, isProp } from '../model/types';
 import type { Asset, Light, LightKind, Material, Placed, SpawnPoint, Terrain, World, Zone } from '../model/types';
-import { addMaterial, deleteSelected, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, removeMaterial, setBrush, updatePartParams, updateMaterial, updateZone, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { addMaterial, deleteSelected, driveSpecOf, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, removeMaterial, setBrush, setDriveSpec, startDrive, stopDrive, updatePartParams, updateMaterial, updateZone, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
 import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
@@ -56,6 +58,51 @@ function Actions() {
   );
 }
 
+/** The demo drive: how this object moves when driven, and the button that starts it. */
+function DriveFields({ placed }: { placed: Placed }) {
+  const drive = useEditor((s) => s.drive);
+  const spec = driveSpecOf(placed);
+  const update = (patch: Partial<typeof spec>) => setDriveSpec(placed.id, patch);
+  const mine = drive?.id === placed.id;
+  return (
+    <>
+      <h2>Demo drive</h2>
+      <SelectField label="Drive" value={spec.model} options={DRIVE_MODELS.map((m) => ({ id: m.id, label: m.label }))} onChange={(model) => update({ model })} />
+      <p className="note">{DRIVE_MODELS.find((m) => m.id === spec.model)?.hint}. Not a physics simulation: a check that the world fits before export.</p>
+      <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <NumberField label="Speed" unit="m/s" value={spec.speed} min={0.01} step={0.1} decimals={2} onChange={(speed) => update({ speed })} />
+        {spec.model === 'ackermann' ? (
+          <NumberField label="Steering" unit="rad" value={spec.turn} min={0.01} max={1.4} step={0.05} decimals={2} onChange={(turn) => update({ turn })} />
+        ) : (
+          <NumberField label="Turn rate" unit="rad/s" value={spec.turn} min={0.01} step={0.1} decimals={2} onChange={(turn) => update({ turn })} />
+        )}
+      </div>
+      {spec.model === 'ackermann' && <NumberField label="Wheelbase" unit="m" value={spec.wheelbase} min={0.01} step={0.05} decimals={2} onChange={(wheelbase) => update({ wheelbase })} />}
+      {mine ? (
+        <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          <button type="button" className="chip" onClick={() => stopDrive(true)}>
+            Park here
+          </button>
+          <button type="button" className="chip" onClick={() => stopDrive(false)}>
+            Stop, put it back
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="chip"
+          onClick={() => {
+            const box = viewerRef.current?.localBounds(placed.id) ?? { min: [-0.25, -0.25, 0] as [number, number, number], max: [0.25, 0.25, 0.5] as [number, number, number] };
+            void startDrive(placed.id, box);
+          }}
+        >
+          Drive it
+        </button>
+      )}
+    </>
+  );
+}
+
 /** A library part's numbers; changing one changes every placement of the part. */
 function PartFields({ asset }: { asset: Extract<Asset, { kind: 'part' }> }) {
   const def = partById(asset.part);
@@ -94,6 +141,7 @@ function ObjectPanel({ world, placed }: { world: World; placed: Placed }) {
           <SelectField label="Collides with" value={placed.physics.collision} options={PHYSICS_COLLISION} onChange={(collision) => physics({ collision })} />
         </>
       )}
+      <DriveFields placed={placed} />
       {asset && (
         <>
           <h2>Source</h2>

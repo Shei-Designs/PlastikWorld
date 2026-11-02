@@ -8,18 +8,25 @@ import { gazeboBundle } from '../io/gazebo';
 import { mujocoBundle } from '../io/mjcf';
 import { isaacBundle } from '../io/usda';
 import { encodeText } from '../io/format';
+import { boundsOf } from '../io/export';
 import type { ExportBundle, Resolved } from '../io/export';
 import { rollingField } from '../io/heightmap';
 import { DEFAULT_BRUSH, dab, generateField } from '../terrain/brush';
 import type { Brush, FieldSpec, Window as BrushWindow } from '../terrain/brush';
 import { heightsFromImage, readImage } from '../terrain/image';
+import { blockedBy, boxAt, groundUnder } from '../drive/collide';
+import type { Box, Obstacle } from '../drive/collide';
+import { DEFAULT_DRIVE, rpyOf, stepPose, tiltOn } from '../drive/kinematics';
+import type { DriveInput, DrivePose, DriveSpec } from '../drive/kinematics';
+import { heightAt } from '../io/heightmap';
+import { loadedAsset } from './assets';
 import type { GreyImage, ImageFit } from '../terrain/image';
 import { boxAround, copernicusTile, heightsFromDem, openDem, openDemUrl } from '../terrain/elevation';
 import type { Dem, DemBox, DemFit, FetchLike } from '../terrain/elevation';
 import { parseWorld, parseWorldText, serializeWorld, serializeWorldText } from '../model/file';
 import { add, newId, uniqueName } from '../model/math';
-import { DEFAULT_PHYSICS, GRID_DEFAULT, MATERIAL_PRESETS, assetPresent, emptyWorld, isProp } from '../model/types';
-import type { Asset, Light, LightKind, Material, PartAsset, Pick, Placed, SpawnPoint, Terrain, Vec3, World, Zone } from '../model/types';
+import { DEFAULT_PHYSICS, GRID_DEFAULT, MATERIAL_PRESETS, assetOf, assetPresent, emptyWorld, isProp } from '../model/types';
+import type { Asset, Light, LightKind, Material, PartAsset, Pick, Placed, Pose, SpawnPoint, Terrain, Vec3, World, Zone } from '../model/types';
 import { partById, settle } from '../parts/library';
 import type { PartParams } from '../parts/library';
 import * as platform from '../platform';
@@ -41,6 +48,28 @@ export interface Notice {
 
 /** The thing the next click on the ground puts down. */
 export type Placing = { kind: 'asset'; asset: string } | { kind: 'light'; light: LightKind } | { kind: 'spawn' };
+
+/** The demo drive: kinematic teleoperation of one placed object, to see that the world fits it. Nothing of it is saved but the spec. */
+export interface Drive {
+  id: string;
+  spec: DriveSpec;
+  pose: DrivePose;
+  /** The world pose the object is drawn at now. */
+  at: Pose;
+  /** Where it was when the drive began, to put it back. */
+  start: Pose;
+  /** How far the object's origin sat above the ground where it started. */
+  clearance: number;
+  /** The object's own box, local, from what the viewer drew. */
+  box: Box;
+  obstacles: Obstacle[];
+  /** What it is up against, if anything. */
+  hit: string | null;
+  /** Where it has been, for the trail, in world coordinates. */
+  trail: Vec3[];
+  /** Forward in the object's own frame, as an angle from its +X (a PlastikCAD Gazebo or MuJoCo robot faces +Y). */
+  forward: number;
+}
 
 /** A tool that takes the pointer on the ground: sculpting with a brush, or drawing a surface zone. */
 export type Tool = { kind: 'sculpt'; brush: Brush } | { kind: 'zone' };
@@ -69,6 +98,8 @@ export interface EditorState {
   browsing: boolean;
   /** The parts library is open. */
   library: boolean;
+  /** The demo drive under way: which object, where it is now, and what it last ran into. */
+  drive: Drive | null;
   /** On a narrow screen (a tablet), the side panel drawn over the viewport, if any. */
   panel: 'sidebar' | 'inspector' | null;
   worlds: WorldInfo[];
@@ -95,6 +126,7 @@ let state: EditorState = {
   storage: null,
   browsing: false,
   library: false,
+  drive: null,
   panel: null,
   worlds: [],
   exporting: false,
@@ -244,6 +276,91 @@ function addPlaced(asset: Asset, at: Vec3): void {
   const physics = asset.kind === 'robot' ? { ...DEFAULT_PHYSICS, static: false } : asset.kind === 'part' ? { ...(partById(asset.part)?.physics ?? DEFAULT_PHYSICS) } : { ...DEFAULT_PHYSICS };
   const placed: Placed = { id, name: uniqueName(asset.name, names(state.world)), asset: asset.id, pose: { xyz: at, rpy: [0, 0, 0] }, scale: 1, physics };
   edit((w) => ({ ...w, objects: [...w.objects, placed] }), { selection: [id], pick: { kind: 'object', id } });
+}
+
+// --- the demo drive -----------------------------------------------------------
+
+/** The spec a placed object drives with: its own when chosen, else the default. */
+export const driveSpecOf = (placed: Placed): DriveSpec => placed.drive ?? DEFAULT_DRIVE;
+
+export function setDriveSpec(id: string, patch: Partial<DriveSpec>): void {
+  const placed = state.world.objects.find((o) => o.id === id);
+  if (!placed) return;
+  const spec = { ...driveSpecOf(placed), ...patch };
+  edit((w) => ({ ...w, objects: w.objects.map((o) => (o.id === id ? { ...o, drive: spec } : o)) }));
+  if (state.drive?.id === id) set({ drive: { ...state.drive, spec } });
+}
+
+/** The boxes of everything else the drive may run into: each prop's pieces (a room is its walls), by its placement. */
+function obstaclesFor(world: World, except: string): Obstacle[] {
+  const out: Obstacle[] = [];
+  for (const o of world.objects) {
+    if (o.id === except || o.physics.collision === 'none') continue;
+    const asset = assetOf(world, o);
+    const loaded = loadedAsset(o.asset);
+    if (!asset || !loaded) continue;
+    const boxes: Box[] = loaded.kind === 'part' ? (loaded.resolved.pieces ?? [loaded.resolved.data!]).map(boundsOf) : loaded.kind === 'glb' && loaded.resolved ? [loaded.resolved.bounds] : [];
+    for (const b of boxes) out.push({ name: o.name, box: boxAt(b, o.pose, o.scale) });
+  }
+  return out;
+}
+
+/** Starts driving a placed object; `box` is its own extent as the viewer drew it. */
+export async function startDrive(id: string, box: Box): Promise<void> {
+  const placed = state.world.objects.find((o) => o.id === id);
+  if (!placed) return;
+  if (state.drive) stopDrive(false);
+  // Every prop's triangles are needed for its box; the GLBs may not have been read yet.
+  for (const o of state.world.objects) if (isProp(assetOf(state.world, o))) await resolveMesh(o.asset);
+  const asset = assetOf(state.world, placed);
+  const forward = asset?.kind === 'robot' && asset.format !== 'ros' ? Math.PI / 2 : 0;
+  const ground = heightAt(state.world.terrain, placed.pose.xyz[0], placed.pose.xyz[1]);
+  const obstacles = obstaclesFor(state.world, id);
+  const foot = boxAt(box, placed.pose, placed.scale);
+  const standing = groundUnder(foot, ground, obstacles, placed.pose.xyz[2]);
+  set({
+    drive: { id, spec: driveSpecOf(placed), pose: { x: placed.pose.xyz[0], y: placed.pose.xyz[1], yaw: placed.pose.rpy[2] }, at: placed.pose, start: placed.pose, clearance: Math.max(0, placed.pose.xyz[2] - standing), box, obstacles, hit: null, trail: [placed.pose.xyz], forward },
+    selection: [id],
+    pick: { kind: 'object', id },
+    tool: null,
+    placing: null,
+  });
+}
+
+/** One frame of the drive: the pose follows the input, the ground and the obstacles. */
+export function driveTick(dt: number, input: DriveInput): void {
+  const d = state.drive;
+  if (!d) return;
+  const spec = d.spec;
+  // The drive steers the robot's own forward; the pose's yaw is of its +X.
+  const facing = { ...d.pose, yaw: d.pose.yaw + d.forward };
+  const next = stepPose(facing, input, spec, dt);
+  const pose: DrivePose = { x: next.x, y: next.y, yaw: next.yaw - d.forward };
+  const terrainAt = (x: number, y: number) => heightAt(state.world.terrain, x, y);
+  const standing = d.at.xyz[2] - d.clearance;
+  const foot = boxAt(d.box, { xyz: [pose.x, pose.y, standing], rpy: [0, 0, pose.yaw] });
+  const hitBy = blockedBy(foot, standing, d.obstacles);
+  if (hitBy) {
+    // Stopped by it; turning on the spot is still allowed, so the driver can back away.
+    const turned: DrivePose = { ...d.pose, yaw: pose.yaw };
+    set({ drive: { ...d, pose: turned, at: { ...d.at, rpy: [d.at.rpy[0], d.at.rpy[1], turned.yaw] }, hit: hitBy.name } });
+    return;
+  }
+  const ground = groundUnder(foot, terrainAt(pose.x, pose.y), d.obstacles, standing);
+  const groundAt = (x: number, y: number) => groundUnder(boxAt(d.box, { xyz: [x, y, ground], rpy: [0, 0, pose.yaw] }), terrainAt(x, y), d.obstacles, ground);
+  const tilt = tiltOn(groundAt, { ...pose, yaw: pose.yaw + d.forward }, spec.wheelbase, Math.max(0.1, (d.box.max[1] - d.box.min[1]) * 0.8));
+  const at: Pose = { xyz: [pose.x, pose.y, ground + d.clearance], rpy: rpyOf(pose, tilt) };
+  const last = d.trail[d.trail.length - 1];
+  const trail = Math.hypot(at.xyz[0] - last[0], at.xyz[1] - last[1]) > 0.1 ? [...d.trail.slice(-600), at.xyz] : d.trail;
+  set({ drive: { ...d, pose, at, hit: null, trail } });
+}
+
+/** Ends the drive: the object goes back where it started, or stays where it was driven to (`park`), as one step of the history. */
+export function stopDrive(park: boolean): void {
+  const d = state.drive;
+  if (!d) return;
+  set({ drive: null });
+  if (park) edit((w) => ({ ...w, objects: w.objects.map((o) => (o.id === d.id ? { ...o, pose: { xyz: d.at.xyz, rpy: [0, 0, d.pose.yaw] } } : o)) }));
 }
 
 // --- the parts library -------------------------------------------------------

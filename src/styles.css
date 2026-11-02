@@ -1384,3 +1384,30 @@ dialog.sheet.wide {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* The on-screen stick of the demo drive, bottom right of the viewport. */
+.drive-stick {
+  position: absolute;
+  z-index: 4;
+  right: 18px;
+  bottom: 18px;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: rgb(0 0 0 / 0.25);
+  touch-action: none;
+  user-select: none;
+}
+
+.drive-stick .knob {
+  position: absolute;
+  left: calc(50% - 22px);
+  top: calc(50% - 22px);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.9;
+  pointer-events: none;
+}

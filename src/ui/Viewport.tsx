@@ -1,13 +1,15 @@
 // The stage: the three.js viewer, the toolbar over it and the corner view widget.
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { Light, World } from '../model/types';
 import { assetEpoch, loadedAsset, subscribeAssets } from '../state/assets';
 import { SNAP_STEPS } from '../state/persist';
-import { addZone, beginGesture, beginSculpt, cancelPlacing, deleteSelected, duplicateSelected, endGesture, endSculpt, moveBy, placeAt, provideThumbnail, redo, sculptAt, select, setPrefs, setTool, showPanel, undo, useEditor } from '../state/store';
+import { addZone, beginGesture, beginSculpt, cancelPlacing, deleteSelected, driveTick, duplicateSelected, endGesture, endSculpt, moveBy, placeAt, provideThumbnail, redo, sculptAt, select, setPrefs, setTool, showPanel, stopDrive, undo, useEditor } from '../state/store';
+import { readInput, setStick, startListening, stopListening } from '../drive/input';
 import { BRUSH_KINDS } from '../terrain/brush';
 import { GIZMO_SIZE, Viewer } from '../viewer/Viewer';
 import type { ViewItem, ViewPreset, ViewZone, Visual } from '../viewer/Viewer';
 import { CloseIcon, DuplicateIcon, FitIcon, GridIcon, MenuIcon, RedoIcon, SlidersIcon, TrashIcon, UndoIcon } from './icons';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 
 const VIEWS: { id: ViewPreset; label: string }[] = [
   { id: 'iso', label: 'Iso' },
@@ -27,11 +29,11 @@ function visualOf(world: World, assetId: string): Visual {
   return { kind: 'missing', key: assetId };
 }
 
-function itemsOf(world: World, selection: string[], epoch: number): ViewItem[] {
+function itemsOf(world: World, selection: string[], epoch: number, driven: { id: string; at: World['objects'][number]['pose'] } | null): ViewItem[] {
   void epoch;
   const picked = new Set(selection);
   return [
-    ...world.objects.map((o) => ({ id: o.id, name: o.name, pose: o.pose, scale: o.scale, selected: picked.has(o.id), visual: visualOf(world, o.asset) })),
+    ...world.objects.map((o) => ({ id: o.id, name: o.name, pose: driven?.id === o.id ? driven.at : o.pose, scale: o.scale, selected: picked.has(o.id), visual: visualOf(world, o.asset) })),
     ...world.lights.map((l: Light) => ({ id: l.id, name: l.name, pose: l.pose, scale: 1, selected: picked.has(l.id), visual: { kind: 'light', light: l.kind } as Visual })),
     ...world.spawns.map((s) => ({ id: s.id, name: s.name, pose: s.pose, scale: 1, selected: picked.has(s.id), visual: { kind: 'spawn' } as Visual })),
   ];
@@ -49,7 +51,9 @@ export function Viewport() {
   const canUndo = useEditor((s) => s.canUndo);
   const canRedo = useEditor((s) => s.canRedo);
   const epoch = useSyncExternalStore(subscribeAssets, assetEpoch);
-  const items = useMemo(() => itemsOf(world, selection, epoch), [world, selection, epoch]);
+  const drive = useEditor((s) => s.drive);
+  const driven = useMemo(() => (drive ? { id: drive.id, at: drive.at } : null), [drive?.id, drive?.at]);
+  const items = useMemo(() => itemsOf(world, selection, epoch, driven), [world, selection, epoch, driven]);
   const zones = useMemo<ViewZone[]>(() => world.zones.map((zone) => ({ zone, color: world.materials.find((m) => m.id === zone.material)?.color ?? [0.5, 0.5, 0.5], selected: selection.includes(zone.id) })), [world.zones, world.materials, selection]);
 
   useEffect(() => {
@@ -94,6 +98,32 @@ export function Viewport() {
   useEffect(() => viewerRef.current?.setPlacing(placing !== null), [placing]);
   useEffect(() => viewerRef.current?.setSculpt(tool?.kind === 'sculpt' ? tool.brush.radius : null), [tool]);
   useEffect(() => viewerRef.current?.setZoneTool(tool?.kind === 'zone'), [tool]);
+
+  // The drive loop: while driving, every frame reads the input, moves the object and rides the camera along.
+  const driving = drive !== null;
+  useEffect(() => {
+    if (!driving) {
+      viewerRef.current?.setTrail(null);
+      return;
+    }
+    startListening();
+    let last = performance.now();
+    let frame = requestAnimationFrame(function tick(now) {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      driveTick(dt, readInput());
+      frame = requestAnimationFrame(tick);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      stopListening();
+    };
+  }, [driving]);
+  useEffect(() => {
+    if (!drive) return;
+    viewerRef.current?.follow(drive.at.xyz);
+    viewerRef.current?.setTrail(drive.trail);
+  }, [drive]);
   // A terrain of another size (real elevation is kilometres across) would leave the camera where it was: refit.
   const [sizeX, sizeY] = world.terrain.size;
   useEffect(() => void viewerRef.current?.fit(), [sizeX, sizeY]);
@@ -164,8 +194,64 @@ export function Viewport() {
           <span>{busy}</span>
         </div>
       )}
+      {drive && (
+        <>
+          <div className="stage-hint">
+            <span>
+              Driving {world.objects.find((o) => o.id === drive.id)?.name}: W A S D or the arrows{drive.spec.model === 'holonomic' ? ', Q and E to strafe' : ''}, Shift to creep, a gamepad, or the stick. {drive.hit ? `Up against ${drive.hit}.` : ''} Esc puts it back; Park keeps it here.
+            </span>
+            <button type="button" className="chip" onClick={() => stopDrive(true)}>
+              Park
+            </button>
+            <button type="button" className="icon-button" aria-label="Stop driving and put it back" onClick={() => stopDrive(false)}>
+              <CloseIcon />
+            </button>
+          </div>
+          <DriveStick />
+        </>
+      )}
       <div className="readout" ref={readout} hidden />
       <ViewWidget />
+    </div>
+  );
+}
+
+/** An on-screen stick for fingers: drag the knob, forward is up, left is left. */
+function DriveStick() {
+  const pad = useRef<HTMLDivElement>(null);
+  const [knob, setKnob] = useState({ x: 0, y: 0 });
+  const move = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = pad.current!.getBoundingClientRect();
+    const r = rect.width / 2;
+    let dx = (e.clientX - rect.left - r) / r, dy = (e.clientY - rect.top - r) / r;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) {
+      dx /= len;
+      dy /= len;
+    }
+    setKnob({ x: dx, y: dy });
+    setStick(-dy, -dx);
+  };
+  const release = () => {
+    setKnob({ x: 0, y: 0 });
+    setStick(0, 0);
+  };
+  return (
+    <div
+      className="drive-stick"
+      ref={pad}
+      aria-label="Drive stick"
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        move(e);
+      }}
+      onPointerMove={(e) => {
+        if (e.buttons) move(e);
+      }}
+      onPointerUp={release}
+      onPointerCancel={release}
+    >
+      <div className="knob" style={{ transform: `translate(${knob.x * 40}px, ${knob.y * 40}px)` }} />
     </div>
   );
 }

@@ -126,6 +126,21 @@ robot drives through the doorway rather than into a solid block. Walls,
 cones and the rest come with their own physics (a wall fixed, a cone loose
 and knockable). Objects modelled in PlastikCAD come in as GLBs beside them.
 
+### Demo drive
+
+Pick anything placed, a robot or a crate standing in for one, and press
+**Drive it** in the inspector: W A S D or the arrows move it, Shift creeps,
+Q and E strafe a holonomic drive, a gamepad's sticks work, and on a touch
+screen a stick appears in the corner. The camera rides along and a line
+marks the way. The drive is kinematic, not a simulation: it chooses between
+a differential drive, an Ackermann car and a holonomic base, follows the
+terrain and the tops of low things like a room's floor, tilts with the
+slope, and stops against the boxes of anything higher than a step, saying
+what it ran into. That is enough to find a doorway too narrow or a shelf in
+the way before the world goes to a simulator. Esc puts the object back where
+it was; **Park** keeps it where it was driven. The drive chosen for a robot
+is saved with the world.
+
 ### Surfaces
 
 The ground has one friction, set on the terrain. For more, add surfaces in
@@ -290,10 +305,9 @@ exports with a note in the other two, the way robot package clashes do now.
    curbs, barriers, cones, lamp posts, trees, rocks, bridges, crates,
    pallets, tables and shelving. A pack of pieces modelled in PlastikCAD can
    join later as GLB assets.
-5. **Demo drive.** Kinematic teleoperation in the viewer (keyboard or
-   gamepad; differential, Ackermann or holonomic), the robot following the
-   ground by ray cast with bounding-box collision against props. Not a
-   physics simulation: a check that the world fits the robot before export.
+5. **Demo drive.** Done: kinematic teleoperation with keyboard, gamepad or
+   an on-screen stick, three drive models, ground following and box
+   collision with a message for what was hit.
 6. **Sky, lighting, fog and wind.** Sky and time of day, fog for cameras
    and lidar (Gazebo and Isaac render it, MuJoCo does not), a global wind
    vector (Gazebo's wind effects, MuJoCo's `wind`, a note for Isaac).

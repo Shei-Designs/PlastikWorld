@@ -105,6 +105,8 @@ export interface Placed {
   /** A uniform scale on a mesh; robots are never scaled. */
   scale: number;
   physics: Physics;
+  /** How the demo drive moves it, once chosen (`src/drive/kinematics.ts`); unset means the default differential drive. */
+  drive?: { model: 'differential' | 'ackermann' | 'holonomic'; speed: number; turn: number; wheelbase: number };
 }
 
 /**

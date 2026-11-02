@@ -23,6 +23,7 @@ import {
   selectAll,
   setBrush,
   setTool,
+  stopDrive,
   showAbout,
   showExport,
   showLibrary,
@@ -75,6 +76,10 @@ function onKeyDown(e: KeyboardEvent): void {
   if (typing(e.target)) return;
 
   if (key === 'Escape') {
+    if (getState().drive) {
+      stopDrive(false);
+      return;
+    }
     if (viewerRef.current?.cancelGesture()) return;
     if (getState().placing) cancelPlacing();
     else if (getState().tool) setTool(null);

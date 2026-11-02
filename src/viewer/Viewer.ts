@@ -18,6 +18,7 @@ import {
   DoubleSide,
   Group,
   HemisphereLight,
+  Line,
   LineBasicMaterial,
   LineSegments,
   Matrix4,
@@ -327,6 +328,7 @@ export class Viewer {
   /** The rectangle being dragged out with the zone tool. */
   private zoneDraft: Mesh<BufferGeometry, MeshBasicMaterial> | null = null;
   private zoneTool = false;
+  private trail: Line<BufferGeometry, LineBasicMaterial> | null = null;
   private terrainKey = '';
 
   private triadScene!: Scene;
@@ -446,6 +448,53 @@ export class Viewer {
   setPlacing(placing: boolean): void {
     this.placing = placing;
     if (this.ok) this.renderer.domElement.style.cursor = placing ? 'copy' : '';
+  }
+
+  /** The box around what is drawn for an item, in the item's own frame (null until its body has loaded). */
+  localBounds(id: string): { min: Vec3; max: Vec3 } | null {
+    const d = this.drawn.get(id);
+    if (!d?.body) return null;
+    d.root.updateMatrixWorld(true);
+    const inverse = d.root.matrixWorld.clone().invert();
+    const box = new Box3();
+    d.body.traverse((o) => {
+      const mesh = o as Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      const local = mesh.geometry.boundingBox!.clone().applyMatrix4(mesh.matrixWorld.clone().premultiply(inverse));
+      box.union(local);
+    });
+    if (box.isEmpty()) return null;
+    return { min: [box.min.x, box.min.y, box.min.z], max: [box.max.x, box.max.y, box.max.z] };
+  }
+
+  /** Moves the camera's target to a point, keeping its offset: the view rides along with a driven robot. */
+  follow(point: Vec3): void {
+    if (!this.ok) return;
+    const target = new Vector3(...point);
+    const delta = target.clone().sub(this.controls.target);
+    if (delta.lengthSq() < 1e-10) return;
+    this.animation = null;
+    this.controls.target.copy(target);
+    this.camera.position.add(delta);
+    this.requestRender();
+  }
+
+  /** The line a driven robot has traced; none to clear it. */
+  setTrail(points: Vec3[] | null): void {
+    if (!this.ok) return;
+    if (this.trail) {
+      this.scene.remove(this.trail);
+      this.trail.geometry.dispose();
+      this.trail = null;
+    }
+    if (points && points.length > 1) {
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(Float32Array.from(points.flatMap((p) => [p[0], p[1], p[2] + 0.03])), 3));
+      this.trail = new Line(geometry, new LineBasicMaterial({ color: THEMES[this.options.theme].accent, transparent: true, opacity: 0.8 }));
+      this.scene.add(this.trail);
+    }
+    this.requestRender();
   }
 
   /** Sculpting with a brush of this radius (meters), or not. */

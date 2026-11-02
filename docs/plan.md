@@ -244,6 +244,13 @@ driving through a doorway in phase 2's drive test; the panel on the tablet.
 
 ## Phase 8. Demo drive (M)
 
+**Done 2026-11-02**: `src/drive/` (kinematics, box collision, input), the
+drive state in the store ticked from the viewport, a follow camera and a
+trail, the stick for touch. Any placed object can be driven. A room's
+floor counts as ground (a step of 8 cm or less is rolled onto), ramps and
+stairs stop the drive since boxes have no slope; a drive model is not yet
+read from PlastikCAD's controllers.yaml.
+
 - Kinematic only. The user picks a placed robot, a drive model
   (differential, Ackermann, holonomic; later read from the package's
   `controllers.yaml` when PlastikCAD wrote one) and goes: WASD and arrows,

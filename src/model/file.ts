@@ -139,7 +139,13 @@ function placed(raw: Record<string, unknown>, index: number, assets: Set<string>
     pose: pose(raw.pose),
     scale: Math.max(num(raw.scale, 1), 1e-6),
     physics: { static: bool(physics.static, DEFAULT_PHYSICS.static), mass: Math.max(num(physics.mass, DEFAULT_PHYSICS.mass), 0), friction: Math.max(num(physics.friction, DEFAULT_PHYSICS.friction), 0), collision },
+    ...(raw.drive && typeof raw.drive === 'object' ? { drive: driveOf(record(raw.drive)) } : {}),
   };
+}
+
+function driveOf(raw: Record<string, unknown>): NonNullable<Placed['drive']> {
+  const model = raw.model === 'ackermann' || raw.model === 'holonomic' ? raw.model : 'differential';
+  return { model, speed: Math.max(num(raw.speed, 1), 0.01), turn: Math.max(num(raw.turn, 1.5), 0.01), wheelbase: Math.max(num(raw.wheelbase, 0.5), 0.01) };
 }
 
 function light(raw: Record<string, unknown>, index: number): Light | null {
