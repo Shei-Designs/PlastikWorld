@@ -61,10 +61,9 @@ with one change of plan: Andrew asked for PlastikCAD's project model, so a
 world is one self-contained file with its assets and heights embedded, rather
 than copies in a folder beside it, and there is no Save (autosave, Ctrl+S
 writes now, "Open world file…" imports a copy, "Save a copy…" exports). The
-heights are Float32 meters inside the JSON, not a sidecar PNG. Still open from
-this phase: PlastikCAD's entry sheet for number boxes when there is no
-keyboard (`inputMode.ts`), and the Drive sync itself (its engine is written
-to the same world store interface, so it lifts in a phase of its own).
+heights are Float32 meters inside the JSON, not a sidecar PNG. Left open from
+this phase and done in phase 11: PlastikCAD's entry sheet for number boxes
+when there is no keyboard (`inputMode.ts`), and the Drive sync itself.
 
 1. **World file v2.**
    - Assets by copy: `~/Documents/PlastikCAD Worlds/Assets/<name>/` holds
@@ -316,6 +315,36 @@ wind that moves in Gazebo and MuJoCo and stays put in Isaac with the note.
 - Android release: `docs/release.md` (the key and its properties file, the
   version in three places, the signed bundle, the Play listing texts and
   graphics); `pnpm brand` now draws the feature graphic and the 512 icon.
+
+## Phase 11. Lifted from PlastikCAD: Drive sync and the touch entry sheet (S)
+
+**Done 2026-11-02.** Both were already built and tested in PlastikCAD, so
+they came over as they are, with projects become worlds.
+
+- `src/sync/`: the engine (match by world id, revisions stamped on save,
+  three-way merge, both versions kept on a conflict), Google sign-in (PKCE
+  to a loopback port on desktop, Play services on Android), the Drive remote
+  (a `PlastikWorld` folder, `drive.file` scope, world id and revision in the
+  file's app properties), IndexedDB for what was last agreed, and the
+  scheduler (after a save, at start, online, focus, every three minutes).
+  `merge.ts` is this app's: objects, lights, spawns, zones, materials and
+  assets merged item by item; name, gravity and environment go with the side
+  that changed them; the terrain is one thing, and sculpting on both sides
+  at once is a conflict. The Rust side gained the loopback commands
+  (`oauth_start`, `oauth_wait`, `oauth_cancel`) and a test that drives them.
+  The worlds browser has the Drive row (link, sync now, unlink); the store
+  takes a sync pass in (the open world reloaded, or merged with unsaved
+  edits). The clients come from `VITE_GOOGLE_*` at build time, as in
+  PlastikCAD; the Play services dependency was already in the device plugin.
+- `inputMode.ts` and `TouchEntry.tsx`, lifted whole: a finger on a number or
+  text box without a keyboard opens the sheet, which sits in the open modal
+  dialog when there is one (this app's one addition, since a dialog's top
+  layer would cover it). Wired into `Fields.tsx` (numbers, vectors, text)
+  and the world name box.
+- Checked in the browser (the sheet from a number box and inside the worlds
+  dialog, the Drive row's unconfigured line). On the tablet: a build with the
+  Android client id, link, sculpt on both devices, and the entry sheet with
+  the keypad up.
 
 ## Parked
 

@@ -345,6 +345,41 @@ export async function pickWorldsFolder(defaultPath?: string): Promise<string | n
   return typeof picked === 'string' ? picked : null;
 }
 
+// --- signing in to Google, for Drive sync (PlastikCAD's, lifted) ----------------------
+
+/** A sign-in waiting for the browser to come back: where it is sent back to, and the loopback port that listens. */
+export interface SignInSession {
+  redirect: string;
+  port: number;
+}
+
+/** Desktop: readies a loopback port for the sign-in to come back to. */
+export async function oauthStart(): Promise<SignInSession> {
+  const port = await command<number>('oauth_start');
+  return { redirect: `http://127.0.0.1:${port}/`, port };
+}
+
+/** Desktop: opens the sign-in page in the system browser and resolves with the query string the browser is sent back with. */
+export const oauthWait = (session: SignInSession, url: string): Promise<string> => command<string>('oauth_wait', { port: session.port, url });
+
+export const oauthCancel = (session: SignInSession): Promise<void> => command<void>('oauth_cancel', { port: session.port });
+
+/**
+ * Android: an access token for the scope from Google Play services, which
+ * knows the app by its package and signing key (Google takes no redirect URL
+ * from an Android app). The first time Google's own sheet asks the user; after
+ * that the grant is remembered. `silent` asks only for what is granted already
+ * and rejects with "needs-sign-in" otherwise; a sheet dismissed rejects with
+ * "cancelled".
+ */
+export async function androidAuthorize(scope: string, silent: boolean): Promise<string> {
+  const { accessToken } = await invoke<{ accessToken: string }>('plugin:device|authorize', { scope, silent });
+  return accessToken;
+}
+
+/** Android: forgets a token Play services holds, so the account is asked again next time. */
+export const androidClearToken = (token: string): Promise<void> => invoke<void>('plugin:device|clear_token', { token }).catch(() => undefined);
+
 /** The world the app was started with: the file passed on the command line on desktop. None in the browser. */
 export async function startupFiles(): Promise<string[]> {
   if (!isTauri()) return [];

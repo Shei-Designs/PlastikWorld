@@ -46,6 +46,20 @@ someone sent never passes for one of yours. **Save a copy…** (Ctrl+Shift+S)
 writes the world wherever you like; on Android into `Download/PlastikWorld`,
 to share from there.
 
+Worlds can be kept in step across devices through Google Drive, the way
+PlastikCAD's projects are. In the worlds browser, **Link Google Drive…** signs
+you in with Google (in your browser on the desktop, in Google's own sheet on
+Android); from then on the app keeps a copy of every world in a `PlastikWorld`
+folder at the top of your Drive and syncs a few seconds after each save, when
+the app starts or comes back online, every few minutes, and on **Sync now**.
+A world changed on two devices is merged object by object; where the same
+object was changed differently on both (or the terrain was sculpted on both),
+both versions are kept, the other device's as a world of its own, so nothing
+anyone did is lost. Exports are never synced. The app asks only for access to
+files it created itself (Google's `drive.file` permission), so it cannot read
+the rest of your Drive, and cannot see a world file dropped into that folder
+by hand; bring such a file in with **Open world file…** instead.
+
 On Android the system hands over one file at a time, so a robot package comes
 in as the zip PlastikCAD exports (dropping a zip works everywhere), and an
 export goes out as a zip of the bundle, into `Download/PlastikWorld` and on
@@ -251,6 +265,33 @@ The Isaac play starts Omniverse Kit, which asks for NVIDIA's EULA the first
 time. Accepting it is your call, so the script does not do it for you: run
 `OMNI_KIT_ACCEPT_EULA=YES pnpm smoke:isaac` once you have.
 
+### Google Drive sync in your own build
+
+Sync talks to Google as an installed app and needs an OAuth client of your
+own, as PlastikCAD's does; without one the worlds browser says sync is not set
+up. In the [Google Cloud console](https://console.cloud.google.com/) create a
+project (or use PlastikCAD's), enable the Google Drive API, set up the OAuth
+consent screen (the only scope used is `drive.file`, which needs no
+verification), and create two OAuth clients: one of type **Desktop app**,
+with an id and a secret, and one of type **Android**, with no secret, given
+the package name `com.sheidesigns.plastikworld` and the SHA-1 of the key the
+APK is signed with (`keytool -list -v` prints it). Then build with them in
+the environment:
+
+```sh
+VITE_GOOGLE_CLIENT_ID=…apps.googleusercontent.com VITE_GOOGLE_CLIENT_SECRET=… VITE_GOOGLE_ANDROID_CLIENT_ID=…apps.googleusercontent.com pnpm tauri build
+```
+
+(or put them in a `.env.local`, which git ignores). For an installed app
+Google does not treat the secret as secret. On desktop the sign-in opens the
+system browser and comes back to a loopback port. On Android, Google takes
+no redirect URL from an app, so Google Play services asks for the grant in
+its own sheet and hands back access tokens; it finds the Android client by
+the app's package name and signing key, and the Android client id in the
+build only says that sync is set up there. A build signed with another key
+(a debug build, Play App Signing) needs that key's SHA-1 on an Android
+client too.
+
 The dev server is pinned to port **1440** (HMR 1441, `vite preview` 1442) so
 that it runs beside PlastikCAD's, which is on 1430: both apps can be developed
 and tested at the same time.
@@ -345,8 +386,8 @@ exports with a note in the other two, the way robot package clashes do now.
 7. **Release surface.** Done: the export panel starts the engine (or
    Blender) on the desktop, the worlds browser shows each world's picture,
    the scene exports as one GLB for Blender, and `docs/release.md` carries
-   the Android release and Play listing. Still to come: Drive sync and the
-   touch entry sheet from PlastikCAD.
+   the Android release and Play listing. Drive sync and the touch entry
+   sheet, both lifted from PlastikCAD, followed as phase 11.
 
 Parked: rain and snow (no engine has them) and water (Gazebo alone, through
 its buoyancy and hydrodynamics plugins), as a later opt-in with notes.

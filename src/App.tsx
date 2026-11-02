@@ -41,6 +41,8 @@ import { Inspector } from './ui/Inspector';
 import { Sidebar } from './ui/Sidebar';
 import { Viewport, viewerRef } from './ui/Viewport';
 import { WorldsDialog } from './ui/WorldsDialog';
+import { TouchEntrySheet } from './ui/TouchEntry';
+import { initInput } from './ui/inputMode';
 import { CheckIcon, CloseIcon, WarningIcon } from './ui/icons';
 
 // Inputs that take no typing: clicking one of these must not put the shortcuts to sleep.
@@ -175,6 +177,8 @@ export default function App() {
       if (document.hidden) void saveWorld();
     };
     document.addEventListener('visibilitychange', onHide);
+    // Android: whether a keyboard is attached, for the boxes to know whether to open the entry sheet.
+    void initInput();
     void restoreSession();
     return () => {
       window.removeEventListener('keydown', onKeyDown);
@@ -200,6 +204,7 @@ export default function App() {
       <ElevationDialog />
       <LibraryDialog />
       <WorldsDialog />
+      <TouchEntrySheet />
     </div>
   );
 }

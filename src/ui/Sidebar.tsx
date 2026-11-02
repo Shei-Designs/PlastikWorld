@@ -28,6 +28,7 @@ import {
 } from '../state/store';
 import { CubeIcon, GridIcon, LibraryIcon, FlagIcon, ImportIcon, LightIcon, Logo, MenuIcon, MoonIcon, PlusIcon, RobotIcon, SunIcon, TerrainIcon, TrashIcon, WorldIcon } from './icons';
 import { Popover } from './Popover';
+import { enterByTouch } from './TouchEntry';
 
 const LIGHT_KINDS: { id: LightKind; label: string }[] = [
   { id: 'sun', label: 'Sun' },
@@ -111,6 +112,7 @@ export function Sidebar() {
           className="doc-name clip"
           value={world.name}
           aria-label="World name"
+          onPointerDown={(e) => enterByTouch(e, { label: 'World name', value: world.name, inputMode: 'text', onCommit: (name) => name.trim() && updateWorld({ name: name.trim() }) })}
           onChange={(e) => updateWorld({ name: e.target.value })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur();

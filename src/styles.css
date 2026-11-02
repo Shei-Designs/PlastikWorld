@@ -1415,3 +1415,101 @@ dialog.sheet.wide {
   opacity: 0.9;
   pointer-events: none;
 }
+
+/* ---------- the Drive row of the worlds browser ---------- */
+
+.drive-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.drive-row .clip {
+  flex: 1;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.drive-row .sync-error {
+  color: #e5636a;
+}
+
+/* ---------- touch entry sheet (PlastikCAD's, lifted) ---------- */
+
+.touch-entry-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.touch-entry {
+  position: fixed;
+  /* `top` is set by the sheet: midway down the room above the keypad. */
+  top: 64px;
+  left: 50%;
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(440px, calc(100vw - 32px));
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+  transition: top 160ms ease-out;
+}
+
+.touch-entry-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.touch-entry-label {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.touch-entry-now {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.touch-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.touch-entry-row .text-input {
+  flex: 1;
+  height: 44px;
+  font-size: 20px;
+}
+
+.touch-entry-unit {
+  flex: none;
+  color: var(--muted);
+}
+
+.touch-entry-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.touch-entry-buttons .chip,
+.touch-entry-buttons .primary {
+  width: auto;
+  height: 36px;
+  padding: 0 18px;
+}

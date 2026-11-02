@@ -1,7 +1,10 @@
 // The inspector's inputs: numbers that commit on Enter or blur, vectors, choices.
+// A finger on a box without a keyboard opens the touch entry sheet instead of
+// the keypad over the box, as PlastikCAD's `Fields.tsx` does.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Vec3 } from '../model/types';
+import { enterByTouch } from './TouchEntry';
 
 interface NumberProps {
   value: number;
@@ -12,13 +15,15 @@ interface NumberProps {
   step?: number;
   /** Shown as typed, so degrees can be edited while radians are stored. */
   display?: { toView: (v: number) => number; fromView: (v: number) => number };
+  /** Named in the entry sheet, beside the value. */
+  unit?: string;
   'aria-label'?: string;
 }
 
 const show = (v: number, decimals: number): string => String(Number(v.toFixed(decimals)));
 
 /** A number box: typing is committed on Enter or when the box loses focus; the arrow keys step it. */
-export function NumberInput({ value, onChange, decimals = 3, min, max, step, display, ...rest }: NumberProps) {
+export function NumberInput({ value, onChange, decimals = 3, min, max, step, display, unit, ...rest }: NumberProps) {
   const view = display ? display.toView(value) : value;
   const [text, setText] = useState(show(view, decimals));
   const [editing, setEditing] = useState(false);
@@ -42,6 +47,8 @@ export function NumberInput({ value, onChange, decimals = 3, min, max, step, dis
       inputMode="decimal"
       value={text}
       aria-label={rest['aria-label']}
+      // A finger does not type into the box under the keypad: the entry sheet takes the value instead (unless a keyboard is attached).
+      onPointerDown={(e) => enterByTouch(e, { label: rest['aria-label'] ?? 'Value', value: show(view, decimals), unit, inputMode: 'decimal', onCommit: commit })}
       onFocus={(e) => {
         setEditing(true);
         e.currentTarget.select();
@@ -81,10 +88,10 @@ export function Field({ label, unit, children, inline }: { label: string; unit?:
   );
 }
 
-export function NumberField({ label, unit, ...props }: NumberProps & { label: string; unit?: string }) {
+export function NumberField({ label, unit, ...props }: NumberProps & { label: string }) {
   return (
     <Field label={label} unit={unit}>
-      <NumberInput aria-label={label} {...props} />
+      <NumberInput aria-label={label} unit={unit} {...props} />
     </Field>
   );
 }
@@ -104,6 +111,7 @@ export function Vec3Field({ label, unit, value, onChange, decimals = 3, step, di
               decimals={decimals}
               step={step}
               min={min}
+              unit={unit}
               display={display}
               onChange={(v) => {
                 const next = [...value] as Vec3;
@@ -121,8 +129,8 @@ export function Vec3Field({ label, unit, value, onChange, decimals = 3, step, di
 export function TextField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
-  const commit = () => {
-    const t = text.trim();
+  const commit = (raw: string) => {
+    const t = raw.trim();
     if (t && t !== value) onChange(t);
     else setText(value);
   };
@@ -133,8 +141,9 @@ export function TextField({ label, value, onChange }: { label: string; value: st
         type="text"
         value={text}
         aria-label={label}
+        onPointerDown={(e) => enterByTouch(e, { label, value, inputMode: 'text', onCommit: commit })}
         onChange={(e) => setText(e.target.value)}
-        onBlur={commit}
+        onBlur={() => commit(text)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur();
           if (e.key === 'Escape') {

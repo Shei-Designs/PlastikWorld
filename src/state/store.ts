@@ -34,6 +34,9 @@ import * as platform from '../platform';
 import { inspectPackage } from '../robot/package';
 import type { PackageFiles } from '../robot/package';
 import { collectFiles, forget, keepGlb, keepPart, keepRobot, resolveMesh, restoreAssets } from './assets';
+import { initSync, linkAccount, requestSync, unlinkAccount } from '../sync/sync';
+import type { SyncReport } from '../sync/engine';
+import { mergeWorlds } from '../sync/merge';
 import { loadPrefs, savePrefs } from './persist';
 import { DiskWorlds, MemoryWorlds, fileNameFor, hasWorldStore, openWorldStore, useWorldStore, worldStore } from './worlds';
 import type { WorldInfo } from './worlds';
@@ -882,6 +885,7 @@ async function write(fresh: boolean): Promise<boolean> {
     // The stamps join the world without counting as a change of it; edits made meanwhile keep it pending.
     set({ key, world: unchanged ? stamped : { ...state.world, ...stamp }, saved: unchanged ? stamped : state.saved, saving: false, prefs: state.prefs.lastWorld === key ? state.prefs : { ...state.prefs, lastWorld: key } });
     lastSaveError = null;
+    requestSync();
     return true;
   } catch (err) {
     set({ saving: false });
@@ -1056,6 +1060,77 @@ export async function deleteWorld(info: WorldInfo): Promise<void> {
   }
 }
 
+// --- Google Drive sync (PlastikCAD's, lifted) ------------------------------------------
+//
+// The sync module keeps the worlds folder in step with the linked account on
+// its own schedule; the editor hears about the open world when a pass changed
+// it under the editor, and about the worlds browser's list.
+
+/** Links a Google account, after saying what that means. */
+export async function linkGoogleDrive(): Promise<void> {
+  const go = await platform.confirm(
+    `${APP_NAME} will keep a copy of your worlds in a "${APP_NAME}" folder in your Google Drive and keep them in step with your other devices. It can see only the files it put there itself: a world file dropped into that folder by hand will not show up here. Sign in with Google now?`,
+    { title: 'Link Google Drive', okLabel: 'Sign in', cancelLabel: 'Not now' },
+  );
+  if (!go) return;
+  try {
+    await linkAccount();
+    tell('ok', 'Google Drive linked.');
+  } catch (err) {
+    fail(err);
+  }
+}
+
+export async function unlinkGoogleDrive(): Promise<void> {
+  const go = await platform.confirm('Unlink Google Drive? Your worlds stay here and in your Drive, but changes no longer sync.', { title: APP_NAME, okLabel: 'Unlink', cancelLabel: 'Keep linked' });
+  if (!go) return;
+  try {
+    await unlinkAccount();
+    tell('ok', 'Google Drive unlinked.');
+  } catch (err) {
+    fail(err);
+  }
+}
+
+/** A sync pass wrote or removed worlds: the open one is taken in again, the browser's list redrawn, and the user told what came. */
+async function applySyncReport(report: SyncReport): Promise<void> {
+  let key = state.key;
+  const moved = key && report.movedKeys.find((m) => m.from === key);
+  if (moved) {
+    key = moved.to;
+    set({ key, prefs: { ...state.prefs, lastWorld: key } });
+  }
+  if (key && report.removedKeys.includes(key)) {
+    adopt(emptyWorld(), null);
+    tell('info', 'The open world was deleted on another device.');
+  } else if (key && report.changedKeys.includes(key)) {
+    await reloadOpenWorld(key);
+  }
+  for (const name of report.kept) tell('info', `"${name}" was changed on two devices at once; both versions were kept.`);
+  if (report.downloaded.length) tell('ok', `Synced ${report.downloaded.length === 1 ? `"${report.downloaded[0]}"` : `${report.downloaded.length} worlds`} from Google Drive.`);
+  if (state.browsing) await refreshWorlds();
+}
+
+/** The open world changed on disk under the editor: taken in whole, or merged with edits not yet saved. */
+async function reloadOpenWorld(key: string): Promise<void> {
+  try {
+    const incoming = parseWorldText(await worldStore().read(key));
+    if (!isDirty()) {
+      const ids = new Set([...incoming.objects, ...incoming.lights, ...incoming.spawns, ...incoming.zones].map((n) => n.id));
+      past = [];
+      future = [];
+      set({ world: incoming, saved: incoming, selection: state.selection.filter((id) => ids.has(id)), placing: null, drive: null });
+    } else {
+      // Edits since the last save are merged onto what came in; the next save writes the result.
+      const { world } = mergeWorlds(state.saved, state.world, incoming);
+      set({ world: { ...world, revision: incoming.revision, parent: incoming.parent }, saved: incoming });
+    }
+    await settleAssets();
+  } catch (err) {
+    fail(err);
+  }
+}
+
 /** Start-up: picks the store, then opens the file the app was started with, or the last world. */
 export async function restoreSession(): Promise<void> {
   try {
@@ -1066,6 +1141,7 @@ export async function restoreSession(): Promise<void> {
     useWorldStore(new MemoryWorlds());
     set({ storage: { location: null, defaultDir: null, fixed: true } });
   }
+  initSync({ device: state.prefs.device, flush: () => saveWorld(true), changed: (report) => void applySyncReport(report), notice: (text) => tell('error', text) });
   const [startup] = await platform.startupFiles();
   if (startup) {
     try {
