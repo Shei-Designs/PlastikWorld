@@ -22,11 +22,17 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
-  # A debug APK, installable on a tablet, built the way `pnpm tauri android build --apk --debug` builds it locally.
+  # A debug APK for an arm64 tablet, built the way `pnpm tauri android build --apk --debug --target aarch64`
+  # builds it locally. One target only: the four-target universal build filled the runner's disk.
   android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The runner image ships toolchains this build never touches; a debug Rust build needs their space.
+      - name: Make room on the runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: pnpm/action-setup@v4
         with:
           version: 11
@@ -43,12 +49,12 @@ jobs:
           packages: platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;26.3.11579264
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tauri android build --apk --debug
+      - run: pnpm tauri android build --apk --debug --target aarch64
         env:
           NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
       - uses: actions/upload-artifact@v4

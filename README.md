@@ -257,7 +257,7 @@ The Android build wants `ANDROID_HOME`, `NDK_HOME` and `JAVA_HOME` in the
 environment and the four Rust Android targets installed, as for PlastikCAD.
 Release builds are signed with the key named in
 `~/.android/plastikworld-keystore.properties` (never in the repository); without
-it the APK is left unsigned. CI builds a debug APK on every push.
+it the APK is left unsigned. CI builds an arm64 debug APK on every push.
 [docs/release.md](docs/release.md) walks through a release: the key, the
 version, the bundle, and the Play listing with its texts and graphics.
 
