@@ -12,6 +12,7 @@ import {
   BoxGeometry,
   CanvasTexture,
   Color,
+  Fog,
   ConeGeometry,
   CylinderGeometry,
   DirectionalLight,
@@ -52,7 +53,8 @@ import type { MeshData } from '../io/export';
 import { heightAt } from '../io/heightmap';
 import { loadGlb, loadObj } from '../io/meshes';
 import { quatOf } from '../model/math';
-import type { LightKind, Pose, Terrain, Vec3, Zone } from '../model/types';
+import { skyOf } from '../model/types';
+import type { Environment, LightKind, Pose, Terrain, Vec3, Zone } from '../model/types';
 import { zoneMesh } from '../io/zones';
 
 export type ViewPreset = 'iso' | 'top' | 'front' | 'side';
@@ -375,6 +377,16 @@ export class Viewer {
     if (!this.ok || this.disposed) return;
     this.sync();
     this.syncZones();
+    this.requestRender();
+  }
+
+  /** The sky and the fog as the world has them: a sky other than a clear day colours the background, fog fades the distance. */
+  setEnvironment(env: Environment): void {
+    if (!this.ok) return;
+    const sky = skyOf(env.sky);
+    if (env.sky === 'clear') this.renderer.setClearColor(0x000000, 0);
+    else this.renderer.setClearColor(new Color(sky.color[0], sky.color[1], sky.color[2]), 1);
+    this.scene.fog = env.fog ? new Fog(new Color(env.fog.color[0], env.fog.color[1], env.fog.color[2]), env.fog.start, env.fog.end) : null;
     this.requestRender();
   }
 

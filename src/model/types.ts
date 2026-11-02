@@ -61,6 +61,10 @@ export interface RobotAsset {
   usd: string | null;
   /** The package's files by path relative to its folder, forward slashes. Empty for a package that could not be read back. */
   files: Record<string, Uint8Array>;
+  /** How the package says the robot is driven (its Gazebo plugin, its drive.json), for the demo drive; absent when it says nothing. */
+  drive?: { model: 'differential' | 'ackermann' | 'holonomic'; speed: number; turn: number; wheelbase: number };
+  /** Forward in the robot's own frame, as an angle from its +X, when the package says (a PlastikCAD MuJoCo export does). */
+  forward?: number;
 }
 
 /** A piece from the parts library: made from its parameters whenever it is needed, so the world carries only the numbers. */
@@ -212,6 +216,7 @@ export interface World {
   /** The surfaces the ground can have, and where it has them. */
   materials: Material[];
   zones: Zone[];
+  environment: Environment;
   /** Stamped on each save, so that two devices can tell whether the other changed the world since they last agreed. */
   revision?: string;
   /** The revision this one followed. */
@@ -223,6 +228,29 @@ export interface World {
   /** A small JPEG data URL of the viewport, for the worlds browser. */
   thumb?: string;
 }
+
+/** The sky, the fog and the wind: what all three engines can take of the weather, the rest is parked. */
+export interface Environment {
+  /** The look of the sky and the time of day; cameras and lidar see it in Gazebo and Isaac, MuJoCo draws it only. */
+  sky: SkyPreset;
+  /** Linear fog, for cameras and lidar; null for clear air. */
+  fog: { color: Vec3; start: number; end: number } | null;
+  /** A steady wind, m/s, in the world frame; zero for still air. Gazebo and MuJoCo blow, Isaac has no wind. */
+  wind: Vec3;
+}
+
+export type SkyPreset = 'clear' | 'overcast' | 'dusk' | 'night';
+
+export const SKY_PRESETS: { id: SkyPreset; label: string; hour: number; color: Vec3; horizon: Vec3; ambient: number }[] = [
+  { id: 'clear', label: 'Clear day', hour: 12, color: [0.45, 0.65, 0.95], horizon: [0.82, 0.88, 0.95], ambient: 0.4 },
+  { id: 'overcast', label: 'Overcast', hour: 13, color: [0.62, 0.65, 0.7], horizon: [0.78, 0.8, 0.82], ambient: 0.55 },
+  { id: 'dusk', label: 'Dusk', hour: 18.5, color: [0.28, 0.25, 0.45], horizon: [0.95, 0.55, 0.3], ambient: 0.25 },
+  { id: 'night', label: 'Night', hour: 23, color: [0.03, 0.04, 0.09], horizon: [0.08, 0.09, 0.15], ambient: 0.06 },
+];
+
+export const DEFAULT_ENVIRONMENT: Environment = { sky: 'clear', fog: null, wind: [0, 0, 0] };
+
+export const skyOf = (preset: SkyPreset) => SKY_PRESETS.find((p) => p.id === preset) ?? SKY_PRESETS[0];
 
 /** Any of the things the sidebar lists and the inspector edits. */
 export type Pick = { kind: 'object'; id: string } | { kind: 'light'; id: string } | { kind: 'spawn'; id: string } | { kind: 'zone'; id: string } | { kind: 'terrain' } | { kind: 'world' };
@@ -251,6 +279,7 @@ export function emptyWorld(name = 'Untitled'): World {
     spawns: [],
     materials: [],
     zones: [],
+    environment: { ...DEFAULT_ENVIRONMENT },
   };
 }
 

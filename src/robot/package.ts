@@ -17,6 +17,20 @@ export interface PackageInfo {
   entry: string;
   rootBody: string | null;
   usd: string | null;
+  /** How the robot is driven, as the package says; absent when it says nothing (an arm, a hand-written package). */
+  drive?: PackageDrive;
+}
+
+/** What a package says about its drive, in the demo drive's terms. */
+export interface PackageDrive {
+  model: 'differential' | 'ackermann' | 'holonomic';
+  /** Top speed, m/s: the wheels' top rate times their radius where the package gives both, else the plugin's own limit. */
+  speed: number;
+  /** Turn rate, rad/s, or the steering limit, rad, for an Ackermann drive. */
+  turn: number;
+  wheelbase: number;
+  /** Forward in the robot's own frame, as an angle from its +X. */
+  forward: number;
 }
 
 /** A visual mesh of the robot: the file inside the package, where it sits in the robot's frame (at zero joint angles), and its scale. */
@@ -49,14 +63,16 @@ export async function inspectPackage(files: PackageFiles): Promise<PackageInfo |
     const entry = paths.find((p) => /^urdf\/[^/]+\.urdf$/.test(p)) ?? paths.find((p) => p.endsWith('.urdf'));
     if (!entry) return null;
     const modelName = (pkg && childOf(pkg, 'name')?.text) || entry.replace(/^.*\//, '').replace(/\.urdf$/, '');
-    return { format: 'ros', modelName, entry, rootBody: null, usd };
+    const urdf = xmlTree(await files.read(entry));
+    return { format: 'ros', modelName, entry, rootBody: null, usd, ...(urdf ? { drive: gzDrive(urdf, 0) } : {}) };
   }
   if (has('model.sdf')) {
     const config = has('model.config') ? xmlTree(await files.read('model.config')) : null;
     const sdf = xmlTree(await files.read('model.sdf'));
     const model = sdf ? childOf(sdf, 'model') : undefined;
     const modelName = (config && childOf(config, 'name')?.text) || model?.attrs.name || 'model';
-    return { format: 'gazebo', modelName, entry: 'model.sdf', rootBody: null, usd };
+    // PlastikCAD's Gazebo models keep the design axes, where forward is +Y.
+    return { format: 'gazebo', modelName, entry: 'model.sdf', rootBody: null, usd, ...(sdf ? { drive: gzDrive(sdf, Math.PI / 2) } : {}) };
   }
   const xmls = paths.filter((p) => !p.includes('/') && p.endsWith('.xml'));
   for (const p of xmls) {
@@ -64,10 +80,76 @@ export async function inspectPackage(files: PackageFiles): Promise<PackageInfo |
     if (!root || localName(root.name) !== 'mujoco') continue;
     const body = root ? childOf(root, 'worldbody') : undefined;
     const first = body ? childrenOf(body, 'body')[0] : undefined;
-    return { format: 'mujoco', modelName: root.attrs.model || p.replace(/\.xml$/, ''), entry: p, rootBody: first?.attrs.name ?? null, usd };
+    const drive = has('drive.json') ? mujocoDrive(await text('drive.json'), root) : undefined;
+    return { format: 'mujoco', modelName: root.attrs.model || p.replace(/\.xml$/, ''), entry: p, rootBody: first?.attrs.name ?? null, usd, ...(drive ? { drive } : {}) };
   }
   void text;
   return null;
+}
+
+/** Every element under `root`, depth first. */
+function* walk(root: XmlElement): Generator<XmlElement> {
+  yield root;
+  for (const c of root.children) yield* walk(c);
+}
+
+const numberOf = (element: XmlElement | undefined, name: string): number | null => {
+  const v = element && childOf(element, name)?.text;
+  const n = v === undefined ? NaN : Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * The drive from the Gazebo plugin a URDF (inside `<gazebo>`) or an SDF model
+ * carries: gz::sim's DiffDrive, AckermannSteering or MecanumDrive, with the
+ * wheel geometry each one is given. `forward` is the robot frame's forward.
+ */
+export function gzDrive(root: XmlElement, forward: number): PackageDrive | undefined {
+  const plugins = [...walk(root)].filter((e) => localName(e.name) === 'plugin');
+  const named = (part: string) => plugins.find((p) => (p.attrs.name ?? '').includes(part) || (p.attrs.filename ?? '').includes(part));
+  const radiusOf = (plugin: XmlElement) => numberOf(plugin, 'wheel_radius');
+  // A wheel joint's velocity limit times the wheel's radius is the speed the package allows; the plugin's own cap wins when given.
+  const jointLimit = Math.max(0, ...[...walk(root)].filter((e) => localName(e.name) === 'joint').map((j) => Number(childOf(j, 'limit')?.attrs.velocity ?? childOf(childOf(j, 'axis') ?? j, 'limit')?.children.find((c) => localName(c.name) === 'velocity')?.text ?? NaN)).filter(Number.isFinite));
+  const speedOf = (plugin: XmlElement): number => numberOf(plugin, 'max_linear_velocity') ?? (jointLimit > 0 && radiusOf(plugin) ? jointLimit * radiusOf(plugin)! : 1);
+  const diff = named('DiffDrive') ?? named('diff-drive');
+  if (diff) {
+    const speed = speedOf(diff);
+    const separation = numberOf(diff, 'wheel_separation') ?? 0.5;
+    return { model: 'differential', speed, turn: Math.min(6, (2 * speed) / separation), wheelbase: separation, forward };
+  }
+  const car = named('AckermannSteering') ?? named('ackermann');
+  if (car) return { model: 'ackermann', speed: speedOf(car), turn: numberOf(car, 'steering_limit') ?? 0.5, wheelbase: numberOf(car, 'wheel_base') ?? 0.5, forward };
+  const omni = named('MecanumDrive') ?? named('mecanum');
+  if (omni) {
+    const speed = speedOf(omni);
+    return { model: 'holonomic', speed, turn: Math.min(6, (2 * speed) / (numberOf(omni, 'wheel_separation') ?? 0.5)), wheelbase: numberOf(omni, 'wheelbase') ?? 0.5, forward };
+  }
+  return undefined;
+}
+
+/** The drive from the `drive.json` a PlastikCAD MuJoCo package carries, with the top speed from the wheel motors' range. */
+export function mujocoDrive(json: string, root: XmlElement): PackageDrive | undefined {
+  let d: Record<string, unknown>;
+  try {
+    d = JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  const model = d.kind === 'ackermann' ? 'ackermann' : d.kind === 'mecanum' ? 'holonomic' : d.kind === 'differential' ? 'differential' : null;
+  if (!model) return undefined;
+  const n = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+  const f = Array.isArray(d.forward) && d.forward.length >= 2 ? Math.atan2(Number(d.forward[1]), Number(d.forward[0])) : Math.PI / 2;
+  const radius = n(d.wheelRadius, 0.05);
+  // The fastest the motors may turn a wheel, from the actuators' ctrlrange.
+  let rate = 0;
+  for (const a of [...walk(root)].filter((e) => ['motor', 'velocity', 'general'].includes(localName(e.name)))) {
+    const range = (a.attrs.ctrlrange ?? '').split(/\s+/).map(Number);
+    if (range.length === 2 && Number.isFinite(range[1])) rate = Math.max(rate, Math.abs(range[1]));
+  }
+  const speed = rate > 0 ? rate * radius : 1;
+  const separation = n(d.wheelSeparation, 0.5);
+  if (model === 'ackermann') return { model, speed, turn: n(d.steeringLimit, 0.5), wheelbase: n(d.wheelBase, 0.5), forward: f };
+  return { model, speed, turn: Math.min(6, (2 * speed) / separation), wheelbase: n(d.wheelBase, separation), forward: f };
 }
 
 /** A `package://name/x`, `model://name/x` or plain mesh reference as a path inside the package folder. */

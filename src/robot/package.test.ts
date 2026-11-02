@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { encodeText } from '../io/format';
-import { inspectPackage, meshPath, visualsOf } from './package';
+import { gzDrive, inspectPackage, meshPath, mujocoDrive, visualsOf } from './package';
+import { xmlTree } from '../io/xml';
 import type { PackageFiles } from './package';
 
 const files = (entries: Record<string, string>): PackageFiles => ({
@@ -107,5 +108,41 @@ describe('visual meshes', () => {
     expect(meshPath('model://quadruped/meshes/visual/Leg.obj')).toBe('meshes/visual/Leg.obj');
     expect(meshPath('./meshes/x.obj')).toBe('meshes/x.obj');
     expect(meshPath('file:///abs/x.obj')).toBe('/abs/x.obj');
+  });
+});
+
+describe('the drive a package says it has', () => {
+  it('reads a DiffDrive plugin in a URDF: speed from the wheel joints and radius, forward +X', () => {
+    const urdf = xmlTree(
+      encodeText(`<robot name="r">
+  <joint name="wl" type="continuous"><parent link="b"/><child link="l"/><limit velocity="20" effort="1"/></joint>
+  <joint name="wr" type="continuous"><parent link="b"/><child link="r"/><limit velocity="20" effort="1"/></joint>
+  <gazebo><plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+    <left_joint>wl</left_joint><right_joint>wr</right_joint><wheel_separation>0.4</wheel_separation><wheel_radius>0.05</wheel_radius>
+  </plugin></gazebo>
+</robot>`),
+    )!;
+    const d = gzDrive(urdf, 0)!;
+    expect(d.model).toBe('differential');
+    expect(d.speed).toBeCloseTo(1); // 20 rad/s × 0.05 m
+    expect(d.turn).toBeCloseTo(5); // 2 v / separation
+    expect(d.forward).toBe(0);
+  });
+
+  it('reads an AckermannSteering plugin in an SDF, forward +Y as PlastikCAD models face', () => {
+    const sdf = xmlTree(encodeText(`<sdf version="1.11"><model name="car"><plugin filename="gz-sim-ackermann-steering-system" name="gz::sim::systems::AckermannSteering"><steering_limit>0.6</steering_limit><wheel_base>1.2</wheel_base><max_linear_velocity>3</max_linear_velocity></plugin></model></sdf>`))!;
+    const d = gzDrive(sdf, Math.PI / 2)!;
+    expect(d).toMatchObject({ model: 'ackermann', speed: 3, turn: 0.6, wheelbase: 1.2, forward: Math.PI / 2 });
+    expect(gzDrive(xmlTree(encodeText('<robot name="arm"/>'))!, 0)).toBeUndefined();
+  });
+
+  it('reads drive.json beside a MuJoCo model, with the top speed from the motors and forward from the file', () => {
+    const root = xmlTree(encodeText('<mujoco model="rover"><actuator><velocity name="a" joint="j" ctrlrange="-20 20"/></actuator></mujoco>'))!;
+    const d = mujocoDrive('{"kind":"differential","forward":[0,1,0],"wheelRadius":0.02,"wheelSeparation":0.092}', root)!;
+    expect(d.model).toBe('differential');
+    expect(d.speed).toBeCloseTo(0.4);
+    expect(d.forward).toBeCloseTo(Math.PI / 2);
+    expect(mujocoDrive('{"kind":"mecanum","forward":[1,0,0],"wheelRadius":0.05,"wheelSeparation":0.4,"wheelBase":0.5}', root)).toMatchObject({ model: 'holonomic', wheelbase: 0.5, forward: 0 });
+    expect(mujocoDrive('not json', root)).toBeUndefined();
   });
 });

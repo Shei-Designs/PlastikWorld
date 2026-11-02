@@ -4,7 +4,7 @@
 // rigid bodies, and each robot referenced from the USD stage its PlastikCAD
 // package carries (Isaac's URDF importer wrote it).
 import { degrees } from '../model/math';
-import { assetOf, assetPresent, isProp } from '../model/types';
+import { assetOf, assetPresent, isProp, skyOf } from '../model/types';
 import type { Light, Placed, Pose, Terrain, Vec3, World } from '../model/types';
 import { bundleName, claimFolder, fmt } from './export';
 import type { ExportBundle, ExportFile, MeshData, Resolved } from './export';
@@ -187,6 +187,12 @@ function lightPrim(light: Light): string {
   ].join('\n');
 }
 
+/** The sky as a dome light in its colour: the ambient the preset gives, which the cameras see. */
+function skyPrim(world: World): string {
+  const sky = skyOf(world.environment.sky);
+  return ['    def DomeLight "Sky"', '    {', `        float inputs:intensity = ${fmt(sky.ambient * 1000, 1)}`, `        color3f inputs:color = ${tuple(sky.horizon, 4)}`, '        float inputs:exposure = 0', '    }'].join('\n');
+}
+
 function propPrim(placed: Placed, data: MeshData): string {
   const name = identifier(placed.name, 'prop');
   const schemas = placed.physics.static ? [] : ['PhysicsRigidBodyAPI', 'PhysicsMassAPI'];
@@ -203,9 +209,12 @@ function propPrim(placed: Placed, data: MeshData): string {
 
 export function isaacBundle(world: World, resolved: Resolved): ExportBundle {
   const name = bundleName(world);
+  const envNotes: string[] = [];
+  if (world.environment.wind.some((v) => v !== 0)) envNotes.push('Isaac Sim has no wind: the stage carries none, and nothing in it is blown about.');
+  if (world.environment.fog) envNotes.push('Fog in Isaac Sim is a render setting, not part of the stage: set it under Render Settings > Post Processing > Fog once the stage is open.');
   const stageName = identifier(world.name, 'world');
   const files: ExportFile[] = [];
-  const notes: string[] = [];
+  const notes: string[] = [...envNotes];
   const copies: ExportBundle['copies'] = [];
   const prims: string[] = [];
   for (const placed of world.objects) {
@@ -277,6 +286,8 @@ def Xform "World"
     }
 
 ${groundPrims(world).join('\n\n')}
+
+${skyPrim(world)}
 
 ${world.lights.map(lightPrim).join('\n\n')}
 

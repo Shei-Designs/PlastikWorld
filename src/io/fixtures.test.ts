@@ -315,8 +315,8 @@ async function yards(): Promise<{ worlds: World[]; resolved: Resolved }> {
         world.zones.push({ id: `zone_${id}`, name: `${material[0].toUpperCase()}${material.slice(1)} patch`, material, rect: [x - 1.5, y - 1.5, x + 1.5, y + 1.5] });
         world.objects.push({ id: `slider_${id}`, name: `Slider ${id}`, asset: 'crate', pose: at(x, y, 0.1), scale: 0.5, physics: physics(true, 'box', 1) });
         if (id === 'ice') {
-          // A waxed crate beside it, across the slope, with a friction as low as the ice: Gazebo's DART takes the
-          // higher of the two frictions that meet, so there the plain crate holds and only this one slides.
+          // A waxed crate beside it, across the slope, with a friction as low as the ice: Gazebo's DART drops the
+          // friction set on a mesh (the zone, on this heightmap), so there the plain crate holds and only this one slides.
           const across = uphill(world.terrain, x, y) + Math.PI / 2;
           const waxed = { ...physics(true, 'box', 1), friction: 0.05 };
           world.objects.push({ id: 'slider_waxed', name: 'Slider waxed', asset: 'crate', pose: at(x + 0.9 * Math.cos(across), y + 0.9 * Math.sin(across), 0.1), scale: 0.5, physics: waxed });
@@ -329,7 +329,34 @@ async function yards(): Promise<{ worlds: World[]; resolved: Resolved }> {
   }
   const resolved: Resolved = { meshes: { crate } };
   worlds.push(rooms(robots, resolved));
+  worlds.push(windy(resolved));
   return { worlds, resolved };
+}
+
+/**
+ * The fourth world: a strong wind over flat ground, at dusk in fog (so the
+ * sky and fog go through every engine's reader too). A light crate must be
+ * blown along in Gazebo and MuJoCo and stay put in Isaac, which has no wind;
+ * a heavy one stays put everywhere.
+ */
+function windy(resolved: Resolved): World {
+  const world = emptyWorld('Smoke Wind');
+  world.environment = { sky: 'dusk', fog: { color: [0.7, 0.7, 0.75], start: 10, end: 80 }, wind: [8, 0, 0] };
+  const def = partById('crate')!;
+  for (const [id, size] of [
+    ['leaf', 0.3],
+    ['anvil', 0.6],
+  ] as const) {
+    const asset: PartAsset = { kind: 'part', id, name: id === 'leaf' ? 'Light crate' : 'Heavy crate', part: 'crate', params: settle(def, { size }), source: { name: 'Parts library', path: null, size: 0 } };
+    const { pieces, merged } = buildPart(def, asset.params);
+    resolved.meshes[id] = { glb: null, data: merged, bounds: boundsOf(merged), pieces };
+    world.assets.push(asset);
+  }
+  world.objects.push(
+    { id: 'leaf1', name: 'Light crate', asset: 'leaf', pose: { xyz: [-3, 0, 0.01], rpy: [0, 0, 0] }, scale: 1, physics: { static: false, mass: 0.2, friction: 0.3, collision: 'box' } },
+    { id: 'anvil1', name: 'Heavy crate', asset: 'anvil', pose: { xyz: [-3, 3, 0.01], rpy: [0, 0, 0] }, scale: 1, physics: { static: false, mass: 200, friction: 0.8, collision: 'box' } },
+  );
+  return world;
 }
 
 /**
@@ -393,8 +420,19 @@ function expectations(world: World, bundle: ExportBundle, mainFile: string, reso
       .filter((p) => isProp(world.assets.find((a) => a.id === p.asset)))
       .map((p) => {
         const slider = /^Slider (\w+)$/.exec(p.name);
-        // On ice the crate must slide, except in Gazebo, where the crate's own friction (0.8) counts and it holds; the waxed crate slides everywhere.
-        const slide = slider ? (slider[1] === 'rubber' ? { slide: 'mustNot', surface: 'rubber' } : slider[1] === 'ice' ? { slide: 'must', surface: 'ice', slideGazebo: 'mustNot' } : { slide: 'must', surface: 'ice' }) : {};
+        // On ice the crate must slide, except in Gazebo, where a mesh zone's friction is dropped and the crate's own (0.8) counts, so it holds; the waxed crate slides everywhere.
+        // In the wind the light crate must be blown along, except in Isaac, which has no wind; the heavy one stays.
+        const slide = slider
+          ? slider[1] === 'rubber'
+            ? { slide: 'mustNot', surface: 'rubber' }
+            : slider[1] === 'ice'
+              ? { slide: 'must', surface: 'ice', slideGazebo: 'mustNot' }
+              : { slide: 'must', surface: 'ice' }
+          : p.name === 'Light crate'
+            ? { slide: 'must', surface: 'wind', slideIsaac: 'mustNot' }
+            : p.name === 'Heavy crate'
+              ? { slide: 'mustNot', surface: 'wind' }
+              : {};
         const bounds = resolved.meshes[p.asset]?.bounds;
         const edge = (bounds ? bounds.max[2] - bounds.min[2] : CRATE) * p.scale;
         return { id: identifier(p.name, 'prop'), name: p.name, free: !p.physics.static, collision: p.physics.collision, xyz: p.pose.xyz, ground: ground(p.pose.xyz[0], p.pose.xyz[1]), edge, probe: p.name.startsWith('Probe '), placed: !left(p), ...slide };
@@ -445,11 +483,12 @@ describe('sample worlds', () => {
       const mujoco = mujocoBundle(world, resolved);
       const isaac = isaacBundle(world, resolved);
       // Each engine takes the props and the robots it can read, and says why it left the others out.
-      expect(gazebo.notes.filter((n) => !/MuJoCo model cannot/.test(n) && !/also named reference_rover/.test(n) && !/takes the higher friction/.test(n))).toEqual([]);
+      expect(gazebo.notes.filter((n) => !/MuJoCo model cannot/.test(n) && !/also named reference_rover/.test(n) && !/drops the friction set on a mesh/.test(n))).toEqual([]);
       for (const bundle of [gazebo, mujoco, isaac]) expect(bundle.notes.filter((n) => /^Gazebo may never settle/.test(n))).toEqual([]);
       expect(mujoco.notes.filter((n) => !/not a MuJoCo model/.test(n))).toEqual([]);
-      expect(isaac.notes.filter((n) => !/no USD stage/.test(n))).toEqual([]);
-      if (robots.length === 3) {
+      expect(isaac.notes.filter((n) => !/no USD stage|no wind|Fog in Isaac Sim/.test(n))).toEqual([]);
+      // The windy world has no robot in it; the others carry one package each.
+      if (robots.length === 3 && world.objects.some((o) => world.assets.find((a) => a.id === o.asset)?.kind === 'robot')) {
         expect(gazebo.copies).toHaveLength(1);
         expect(mujoco.copies).toHaveLength(1);
         // Only the ROS package carries a USD stage.

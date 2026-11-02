@@ -98,6 +98,7 @@ export function Viewport() {
   useEffect(() => viewerRef.current?.setPlacing(placing !== null), [placing]);
   useEffect(() => viewerRef.current?.setSculpt(tool?.kind === 'sculpt' ? tool.brush.radius : null), [tool]);
   useEffect(() => viewerRef.current?.setZoneTool(tool?.kind === 'zone'), [tool]);
+  useEffect(() => viewerRef.current?.setEnvironment(world.environment), [world.environment]);
 
   // The drive loop: while driving, every frame reads the input, moves the object and rides the camera along.
   const driving = drive !== null;

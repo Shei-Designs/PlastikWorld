@@ -5,9 +5,9 @@ import type { FieldSpec } from '../terrain/brush';
 import { partById } from '../parts/library';
 import { DRIVE_MODELS } from '../drive/kinematics';
 import { viewerRef } from './Viewport';
-import { GRID_MAX, GRID_SIZES, MATERIAL_PRESETS, assetOf, isProp } from '../model/types';
+import { GRID_MAX, GRID_SIZES, MATERIAL_PRESETS, SKY_PRESETS, assetOf, isProp, skyOf } from '../model/types';
 import type { Asset, Light, LightKind, Material, Placed, SpawnPoint, Terrain, World, Zone } from '../model/types';
-import { addMaterial, deleteSelected, driveSpecOf, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, removeMaterial, setBrush, setDriveSpec, startDrive, stopDrive, updatePartParams, updateMaterial, updateZone, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
+import { addMaterial, deleteSelected, driveSpecOf, updateEnvironment, duplicateSelected, fetchElevation, generateTerrain, importElevation, importHeightmap, removeMaterial, setBrush, setDriveSpec, startDrive, stopDrive, updatePartParams, updateMaterial, updateZone, setTerrainKind, setTool, showExport, updateLight, updateObject, updateSpawn, updateTerrain, updateWorld, useEditor } from '../state/store';
 import { useState } from 'react';
 import { CheckField, ColorField, DEGREES, NumberField, SelectField, TextField, Vec3Field } from './Fields';
 import { DuplicateIcon, ExportIcon, TrashIcon } from './icons';
@@ -59,16 +59,20 @@ function Actions() {
 }
 
 /** The demo drive: how this object moves when driven, and the button that starts it. */
-function DriveFields({ placed }: { placed: Placed }) {
+function DriveFields({ world, placed }: { world: World; placed: Placed }) {
   const drive = useEditor((s) => s.drive);
-  const spec = driveSpecOf(placed);
+  const spec = driveSpecOf(world, placed);
+  const asset = assetOf(world, placed);
+  const fromPackage = !placed.drive && asset?.kind === 'robot' && asset.drive;
   const update = (patch: Partial<typeof spec>) => setDriveSpec(placed.id, patch);
   const mine = drive?.id === placed.id;
   return (
     <>
       <h2>Demo drive</h2>
       <SelectField label="Drive" value={spec.model} options={DRIVE_MODELS.map((m) => ({ id: m.id, label: m.label }))} onChange={(model) => update({ model })} />
-      <p className="note">{DRIVE_MODELS.find((m) => m.id === spec.model)?.hint}. Not a physics simulation: a check that the world fits before export.</p>
+      <p className="note">
+        {DRIVE_MODELS.find((m) => m.id === spec.model)?.hint}.{fromPackage ? ' Read from the package; change a number to override it.' : ''} Not a physics simulation: a check that the world fits before export.
+      </p>
       <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <NumberField label="Speed" unit="m/s" value={spec.speed} min={0.01} step={0.1} decimals={2} onChange={(speed) => update({ speed })} />
         {spec.model === 'ackermann' ? (
@@ -141,7 +145,7 @@ function ObjectPanel({ world, placed }: { world: World; placed: Placed }) {
           <SelectField label="Collides with" value={placed.physics.collision} options={PHYSICS_COLLISION} onChange={(collision) => physics({ collision })} />
         </>
       )}
-      <DriveFields placed={placed} />
+      <DriveFields world={world} placed={placed} />
       {asset && (
         <>
           <h2>Source</h2>
@@ -369,6 +373,34 @@ function MaterialRow({ material }: { material: Material }) {
   );
 }
 
+/** The sky, the fog and the wind. */
+function EnvironmentFields({ env }: { env: World['environment'] }) {
+  const windSpeed = Math.hypot(env.wind[0], env.wind[1]);
+  const windFrom = (Math.atan2(env.wind[1], env.wind[0]) * 180) / Math.PI;
+  const setWind = (speed: number, deg: number) => updateEnvironment({ wind: [speed * Math.cos((deg * Math.PI) / 180), speed * Math.sin((deg * Math.PI) / 180), 0] });
+  return (
+    <>
+      <h2>Sky and weather</h2>
+      <SelectField label="Sky" value={env.sky} options={SKY_PRESETS.map((p) => ({ id: p.id, label: p.label }))} onChange={(sky) => updateEnvironment({ sky })} />
+      <CheckField label="Fog" value={env.fog !== null} onChange={(on) => updateEnvironment({ fog: on ? { color: skyOf(env.sky).horizon, start: 5, end: 60 } : null })} />
+      {env.fog && (
+        <>
+          <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <NumberField label="Fog from" unit="m" value={env.fog.start} min={0} step={1} onChange={(start) => updateEnvironment({ fog: { ...env.fog!, start } })} />
+            <NumberField label="Full at" unit="m" value={env.fog.end} min={0.1} step={5} onChange={(end) => updateEnvironment({ fog: { ...env.fog!, end: Math.max(end, env.fog!.start + 0.1) } })} />
+          </div>
+          <ColorField label="Fog colour" value={env.fog.color} onChange={(color) => updateEnvironment({ fog: { ...env.fog!, color } })} />
+        </>
+      )}
+      <div className="vec3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <NumberField label="Wind" unit="m/s" value={windSpeed} min={0} step={1} decimals={1} onChange={(v) => setWind(v, windFrom)} />
+        <NumberField label="Blowing towards" unit="°" value={windFrom} step={15} decimals={0} onChange={(d) => setWind(windSpeed, d)} />
+      </div>
+      <p className="note">The sky and the fog are what cameras and lidar see in Gazebo and Isaac Sim (MuJoCo only draws them); the wind blows in Gazebo and MuJoCo, and the Isaac export says it has none. Rain, snow and water are not in any engine.</p>
+    </>
+  );
+}
+
 function WorldPanel({ world }: { world: World }) {
   return (
     <div className="params">
@@ -386,6 +418,7 @@ function WorldPanel({ world }: { world: World }) {
         <dt>Spawn points</dt>
         <dd>{world.spawns.length}</dd>
       </dl>
+      <EnvironmentFields env={world.environment} />
       <h2>Surfaces</h2>
       {world.materials.map((m) => (
         <MaterialRow key={m.id} material={m} />

@@ -12,8 +12,8 @@ import { floatsFromBase64, floatsToBase64, fromBase64, toBase64 } from '../io/ba
 import { decodeText, encodeText } from '../io/format';
 import { resample } from '../io/heightmap';
 import { newId } from './math';
-import { DEFAULT_PHYSICS, emptyWorld, GRID_SIZES, IDENTITY_POSE, snapGridSize } from './types';
-import type { Asset, Light, Material, Placed, Pose, SpawnPoint, Terrain, Vec3, World, Zone } from './types';
+import { DEFAULT_ENVIRONMENT, DEFAULT_PHYSICS, emptyWorld, GRID_SIZES, IDENTITY_POSE, snapGridSize } from './types';
+import type { Asset, Environment, Light, Material, Placed, Pose, SpawnPoint, Terrain, Vec3, World, Zone } from './types';
 
 /** Longest thumbnail written into a file. */
 export const MAX_THUMB = 200_000;
@@ -45,7 +45,7 @@ const assetJson = (a: Asset): Record<string, unknown> =>
     ? { kind: a.kind, id: a.id, name: a.name, source: a.source, data: toBase64(a.data) }
     : a.kind === 'part'
       ? { kind: a.kind, id: a.id, name: a.name, part: a.part, params: a.params, source: a.source }
-      : { kind: a.kind, id: a.id, name: a.name, format: a.format, source: a.source, modelName: a.modelName, entry: a.entry, rootBody: a.rootBody, usd: a.usd, files: Object.fromEntries(Object.keys(a.files).sort().map((p) => [p, toBase64(a.files[p])])) };
+      : { kind: a.kind, id: a.id, name: a.name, format: a.format, source: a.source, modelName: a.modelName, entry: a.entry, rootBody: a.rootBody, usd: a.usd, drive: a.drive, forward: a.forward, files: Object.fromEntries(Object.keys(a.files).sort().map((p) => [p, toBase64(a.files[p])])) };
 
 /** The world as text: the header first, the scene, then the assets. */
 export function serializeWorldText(world: World): string {
@@ -66,6 +66,7 @@ export function serializeWorldText(world: World): string {
     spawns: world.spawns,
     materials: world.materials,
     zones: world.zones,
+    environment: world.environment,
     assets: world.assets.map(assetJson),
   };
   return pretty(file, 0) + '\n';
@@ -114,6 +115,8 @@ function asset(raw: Record<string, unknown>, index: number): Asset | null {
       rootBody: typeof raw.rootBody === 'string' ? raw.rootBody : null,
       usd: typeof raw.usd === 'string' ? raw.usd : null,
       files,
+      ...(raw.drive && typeof raw.drive === 'object' ? { drive: driveOf(record(raw.drive)) } : {}),
+      ...(typeof raw.forward === 'number' && Number.isFinite(raw.forward) ? { forward: raw.forward } : {}),
     };
   }
   if (raw.kind === 'part') {
@@ -176,6 +179,13 @@ function zone(raw: Record<string, unknown>, index: number, materials: Set<string
   const materialId = str(raw.material, '');
   if (!id || !rect || !materials.has(materialId)) return null;
   return { id, name: str(raw.name, `Zone ${index + 1}`), material: materialId, rect: [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])] };
+}
+
+function environment(raw: Record<string, unknown>): Environment {
+  const sky = raw.sky === 'overcast' || raw.sky === 'dusk' || raw.sky === 'night' ? raw.sky : 'clear';
+  const f = raw.fog && typeof raw.fog === 'object' ? record(raw.fog) : null;
+  const fog = f ? { color: vec3(f.color, [0.75, 0.78, 0.8]), start: Math.max(num(f.start, 5), 0), end: Math.max(num(f.end, 60), 0.1) } : null;
+  return { sky, fog, wind: vec3(raw.wind, DEFAULT_ENVIRONMENT.wind) };
 }
 
 function spawn(raw: Record<string, unknown>, index: number): SpawnPoint | null {
@@ -247,6 +257,7 @@ export function parseWorldText(text: string): World {
     zones: list(raw.zones)
       .map((z, i) => zone(z, i, materialIds))
       .filter((z): z is Zone => z !== null),
+    environment: environment(record(raw.environment)),
   };
   const revision = readId(file.revision);
   if (revision) world.revision = revision;

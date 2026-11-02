@@ -104,11 +104,34 @@ describe('Gazebo', () => {
     const obj = text(bundle, 'meshes/Rink.obj');
     expect(obj).toContain('v -2.5 -2.5 0.51');
     expect(obj).not.toContain('v 5 ');
-    // The loose crate has friction 0.7: the ice would not slow it in DART, and the note says so.
-    expect(bundle.notes).toEqual([expect.stringMatching(/Rink: Gazebo takes the higher friction/)]);
+    // The loose crate has friction 0.7: DART drops a mesh's friction, so the ice would not slow it, and the note says so.
+    expect(bundle.notes).toEqual([expect.stringMatching(/Rink: Gazebo drops the friction set on a mesh/)]);
+    // A heightmap's own friction is dropped too, and a loose mesh-collision prop's; a plane's and a box's count.
+    world.terrain.friction = 0.4;
+    world.objects[1].physics.collision = 'mesh';
+    const more = gazeboBundle(world, resolved).notes;
+    expect(more.filter((n) => /Terrain: Gazebo drops the friction set on a heightmap/.test(n))).toHaveLength(1);
+    expect(more.filter((n) => /Loose crate: Gazebo drops the friction set on a mesh collision/.test(n))).toHaveLength(1);
+    world.terrain.friction = 1;
+    world.objects[1].physics.collision = 'box';
     // On a plane the zone is a thin box instead.
     world.terrain = { kind: 'plane', size: [10, 10], friction: 1 };
     expect(text(gazeboBundle(world, resolved), 'Test_Yard.sdf')).toContain('<box><size>5 2.5 0.02</size></box>');
+  });
+
+  it('writes the sky, the fog and the wind into the scene, and lets the wind at free props', () => {
+    const { world, resolved } = yard();
+    world.environment = { sky: 'dusk', fog: { color: [0.7, 0.7, 0.75], start: 10, end: 80 }, wind: [8, 0, 0] };
+    const sdf = text(gazeboBundle(world, resolved), 'Test_Yard.sdf');
+    expect(sdf).toContain('<sky><time>18.5</time></sky><fog><type>linear</type><color>0.7 0.7 0.75 1</color><start>10</start><end>80</end></fog></scene>');
+    expect(sdf).toContain('<wind><linear_velocity>8 0 0</linear_velocity></wind>');
+    expect(sdf).toContain('gz::sim::systems::WindEffects');
+    // The bare-number form of the factor is squared by Gazebo Harmonic; the polynomial form means what it says.
+    expect(sdf).toContain('<force_approximation_scaling_factor><k>0.5</k><px>0 0 0 1</px></force_approximation_scaling_factor>');
+    // The loose crate feels the wind; the fixed one has no need to.
+    expect(sdf.match(/<enable_wind>true<\/enable_wind>/g)).toHaveLength(1);
+    world.environment = { sky: 'clear', fog: null, wind: [0, 0, 0] };
+    expect(text(gazeboBundle(world, resolved), 'Test_Yard.sdf')).not.toContain('WindEffects');
   });
 
   it('warns about a moving mesh on a heightmap', () => {
@@ -116,7 +139,8 @@ describe('Gazebo', () => {
     world.terrain = { kind: 'heightmap', size: [10, 10], friction: 1, rows: 3, cols: 3, heights: new Float32Array(9).fill(0.5) };
     world.objects[1].physics = { ...world.objects[1].physics, collision: 'mesh' };
     const bundle = gazeboBundle(world, resolved);
-    expect(bundle.notes).toEqual([expect.stringMatching(/Gazebo may never settle Loose crate/)]);
+    // Two notes: it may never settle, and as a loose mesh its friction is dropped.
+    expect(bundle.notes).toEqual([expect.stringMatching(/Loose crate: Gazebo drops the friction/), expect.stringMatching(/Gazebo may never settle Loose crate/)]);
     expect(text(bundle, 'Test_Yard.sdf')).toContain('<model name="Loose_crate">');
   });
 
@@ -177,6 +201,25 @@ describe('MuJoCo', () => {
     // The lowest sample sits at 0.5 m, the span is 1 m.
     expect(xml).toContain('size="3 2 1 0.02"');
     expect(xml).toContain('pos="0 0 0.5"');
+  });
+
+  it('gives a loose prop its mass once: the visual mesh weighs nothing beside its collision box', () => {
+    const { world, resolved } = yard('mujoco');
+    const xml = text(mujocoBundle(world, resolved), 'Test_Yard.xml');
+    expect(xml).toContain('contype="0" conaffinity="0" group="2" density="0"/>');
+    expect(xml).toContain('rgba="0.6 0.6 0.9 0.3" friction="0.7 0.005 0.0001" mass="2.5"/>');
+  });
+
+  it('sets the wind with the air to carry it, and draws the fog and sky', () => {
+    const { world, resolved } = yard('mujoco');
+    world.environment = { sky: 'night', fog: { color: [0.2, 0.2, 0.25], start: 5, end: 40 }, wind: [0, -6, 0] };
+    const xml = text(mujocoBundle(world, resolved), 'Test_Yard.xml');
+    expect(xml).toContain('wind="0 -6 0" density="1.2" viscosity="1.8e-5"');
+    expect(xml).toContain('<map fogstart="5" fogend="40"/>');
+    expect(xml).toContain('fog="0.2 0.2 0.25 1"');
+    expect(xml).toContain('<texture type="skybox" builtin="gradient" rgb1="0.03 0.04 0.09"');
+    world.environment = { sky: 'clear', fog: null, wind: [0, 0, 0] };
+    expect(text(mujocoBundle(world, resolved), 'Test_Yard.xml')).not.toContain('density="1.2"');
   });
 
   it('leaves out a second model with the same name', () => {
@@ -245,6 +288,15 @@ describe('Isaac Sim', () => {
     expect(usda).toContain('def Xform "Rink"');
     expect(usda).toContain('point3f[] points = [(0, 0, 0.002), (2, 0, 0.002), (0, 2, 0.002), (2, 2, 0.002)]');
     expect(usda).toContain('rel material:binding:physics = </World/PhysicsMaterials/Ice_ice>');
+  });
+
+  it('lights the sky with a dome and says what Isaac cannot do about wind and fog', () => {
+    const { world, resolved } = yard();
+    world.environment = { sky: 'overcast', fog: { color: [0.7, 0.7, 0.75], start: 10, end: 80 }, wind: [8, 0, 0] };
+    const bundle = isaacBundle(world, resolved);
+    expect(text(bundle, 'Test_Yard.usda')).toContain('def DomeLight "Sky"');
+    expect(bundle.notes.filter((n) => /no wind/.test(n))).toHaveLength(1);
+    expect(bundle.notes.filter((n) => /Fog in Isaac Sim/.test(n))).toHaveLength(1);
   });
 
   it('says when a robot carries no USD', () => {

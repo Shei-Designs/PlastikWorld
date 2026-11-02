@@ -26,6 +26,7 @@ const sample = (): World => {
   w.terrain = { kind: 'heightmap', size: [10, 8], friction: 0.9, rows: 65, cols: 65, heights: Float32Array.from({ length: 65 * 65 }, (_, i) => Math.sin(i) * 1.5) };
   w.materials.push({ id: 'ice', name: 'Ice', friction: 0.05, restitution: 0.02, color: [0.75, 0.88, 0.95] });
   w.zones.push({ id: 'z1', name: 'Rink', material: 'ice', rect: [-2, -2, 2, 1] });
+  w.environment = { sky: 'dusk', fog: { color: [0.7, 0.7, 0.75], start: 10, end: 80 }, wind: [3, -1, 0] };
   w.revision = 'rev00000000000001';
   w.saved = '2026-11-01T20:00:00.000Z';
   return w;

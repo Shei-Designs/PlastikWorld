@@ -3,7 +3,7 @@
 // each, since MuJoCo reads no GLB), and each robot brought in by attaching its
 // own model file, so its actuators and sensors come along and its floor does not.
 import { quatOf } from '../model/math';
-import { assetOf, assetPresent, isProp } from '../model/types';
+import { assetOf, assetPresent, isProp, skyOf } from '../model/types';
 import type { Light, World } from '../model/types';
 import { bundleName, claimFolder, escapeXml, fmt, vec } from './export';
 import type { ExportBundle, ExportFile, Resolved } from './export';
@@ -134,7 +134,9 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
       if (!placed.physics.static) lines.push(`      <freejoint name="${escapeXml(bodyName)}_free"/>`);
       if (placed.physics.collision === 'mesh') lines.push(`      <geom type="mesh" mesh="${meshName}" ${frictionAttr(placed.physics.friction)}${mass}/>`);
       else {
-        lines.push(`      <geom type="mesh" mesh="${meshName}" contype="0" conaffinity="0" group="2"${placed.physics.collision === 'none' ? mass : ''}/>`);
+        // A visual-only geom weighs nothing (MuJoCo would give it a density of water otherwise: the windy fixture's
+        // light crate came out at 27 kg); the collision box carries the mass, or the visual does when there is none.
+        lines.push(`      <geom type="mesh" mesh="${meshName}" contype="0" conaffinity="0" group="2"${placed.physics.collision === 'none' ? mass : ' density="0"'}/>`);
         if (placed.physics.collision === 'box') lines.push(`      <geom type="box" pos="${center.map((v) => fmt(v, 6)).join(' ')}" size="${size.map((v) => fmt(v, 6)).join(' ')}" group="3" rgba="0.6 0.6 0.9 0.3" ${frictionAttr(placed.physics.friction)}${mass}/>`);
       }
       lines.push('    </body>');
@@ -162,12 +164,17 @@ export function mujocoBundle(world: World, resolved: Resolved): ExportBundle {
     if (!assets.some((a) => a.includes(`<model name="${model}"`))) assets.push(`    <model name="${model}" file="${folder}/${asset.entry}"/>`);
     bodies.push(`    <frame name="${escapeXml(bodyName)}_spawn" pos="${vec(placed.pose.xyz)}" quat="${quat(placed.pose.rpy)}"><attach model="${model}" body="${escapeXml(asset.rootBody)}" prefix="${escapeXml(bodyName)}_"/></frame>`);
   }
+  const env = world.environment;
+  const sky = skyOf(env.sky);
   const xml = [
     '<!-- Made with PlastikWorld. Units: meters, kilograms, radians. -->',
     `<mujoco model="${escapeXml(modelName)}">`,
     '  <compiler angle="radian" meshdir="meshes" autolimits="true"/>',
-    `  <option timestep="${TIMESTEP}" gravity="${vec(world.gravity)}" integrator="implicitfast"/>`,
+    // Wind acts through MuJoCo's fluid drag, which needs the air's density and viscosity to be set; still air leaves them off.
+    `  <option timestep="${TIMESTEP}" gravity="${vec(world.gravity)}" integrator="implicitfast"${env.wind.some((v) => v !== 0) ? ` wind="${vec(env.wind, 3)}" density="1.2" viscosity="1.8e-5"` : ''}/>`,
+    `  <visual>${env.fog ? `<map fogstart="${fmt(env.fog.start, 3)}" fogend="${fmt(env.fog.end, 3)}"/>` : ''}<rgba haze="${vec(sky.horizon, 3)} 1"${env.fog ? ` fog="${vec(env.fog.color, 3)} 1"` : ''}/><headlight ambient="${fmt(sky.ambient, 3)} ${fmt(sky.ambient, 3)} ${fmt(sky.ambient, 3)}"/></visual>`,
     '  <asset>',
+    `    <texture type="skybox" builtin="gradient" rgb1="${vec(sky.color, 3)}" rgb2="${vec(sky.horizon, 3)}" width="256" height="256"/>`,
     '    <texture name="grid" type="2d" builtin="checker" rgb1="0.2 0.3 0.4" rgb2="0.1 0.15 0.2" width="300" height="300"/>',
     '    <material name="floor" texture="grid" texrepeat="8 8" reflectance="0.1"/>',
     ...assets,

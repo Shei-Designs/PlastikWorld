@@ -138,8 +138,25 @@ terrain and the tops of low things like a room's floor, tilts with the
 slope, and stops against the boxes of anything higher than a step, saying
 what it ran into. That is enough to find a doorway too narrow or a shelf in
 the way before the world goes to a simulator. Esc puts the object back where
-it was; **Park** keeps it where it was driven. The drive chosen for a robot
-is saved with the world.
+it was; **Park** keeps it where it was driven. A robot package says how it
+is driven, and the import reads it: the gz DiffDrive, AckermannSteering or
+MecanumDrive plugin in a URDF or SDF, or the `drive.json` beside a PlastikCAD
+MuJoCo model, with the top speed from the wheels' rate and radius and which
+way is forward. Any number can be overridden, and the choice is saved with
+the world.
+
+### Sky and weather
+
+In the world settings: a sky (a clear day, overcast, dusk, night), fog from
+one distance to another in a colour, and a steady wind by speed and
+direction. The sky and the fog are what cameras and lidar see in Gazebo and
+Isaac Sim, and MuJoCo draws them; the wind blows in Gazebo, through its wind
+effects system on every loose object (an approximation that pushes in
+proportion to mass, scaled so a well-planted object holds), and in MuJoCo,
+through its fluid drag with the air's density set, and the Isaac export says
+plainly that it has none. Rain, snow and water are in no engine and stay parked. The smoke tests
+blow a light crate along in an 8 m/s wind in Gazebo and MuJoCo, leave a
+heavy one standing, and check that Isaac leaves both where they were.
 
 ### Surfaces
 
@@ -152,9 +169,11 @@ Gazebo and Isaac Sim get a static mesh patch of the zone's cells laid a
 little over the ground with the surface's friction (Isaac's friction rule set
 to take the lesser of the two surfaces that meet); MuJoCo gets a heightfield
 of the same cells, with priority so its friction counts. One engine differs:
-Gazebo's DART takes the higher of the two frictions that meet, so an ice zone
-slows a body there only when the body's own friction is as low, and the
-export says so. The smoke tests set crates on an ice zone and a rubber zone
+Gazebo's DART drops any friction set on a mesh or a heightmap (between planes
+and boxes it takes the lower of the two), so on a heightmap an ice zone slows
+a body only when the body's own friction is as low, and the export says so;
+on flat ground the zone goes out as a thin box and works. The same goes for
+a prop with a mesh collision: give it a box collision where friction matters. The smoke tests set crates on an ice zone and a rubber zone
 on the same hillside: on ice a plain crate slides in MuJoCo and Isaac and a
 waxed one slides in all three; on rubber every crate holds.
 
@@ -308,9 +327,9 @@ exports with a note in the other two, the way robot package clashes do now.
 5. **Demo drive.** Done: kinematic teleoperation with keyboard, gamepad or
    an on-screen stick, three drive models, ground following and box
    collision with a message for what was hit.
-6. **Sky, lighting, fog and wind.** Sky and time of day, fog for cameras
-   and lidar (Gazebo and Isaac render it, MuJoCo does not), a global wind
-   vector (Gazebo's wind effects, MuJoCo's `wind`, a note for Isaac).
+6. **Sky, lighting, fog and wind.** Done: sky presets, linear fog and a
+   wind vector, written for Gazebo and MuJoCo, with a dome light and a note
+   for Isaac.
 7. Launch the simulator from the app; a worlds browser with thumbnails;
    Android through `platform.ts`; a GLB of the whole scene for Blender.
 

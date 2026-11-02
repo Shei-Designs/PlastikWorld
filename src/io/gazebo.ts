@@ -14,12 +14,11 @@ import { placedZones, zoneMesh } from './zones';
 
 /**
  * How far a zone sits over the ground in Gazebo: a centimetre, not the
- * writers' usual two millimetres, since with less DART still finds the
- * heightmap under a body on the patch and takes the ground's friction (the
- * crate on the ice zone held fast in the smoke test at 2 mm).
+ * writers' usual two millimetres, so that a body on the patch stays clear of
+ * the heightmap's contacts under it.
  */
 const GAZEBO_ZONE_LIFT = 0.01;
-import { assetOf, assetPresent, isProp } from '../model/types';
+import { assetOf, assetPresent, isProp, skyOf } from '../model/types';
 import type { Light, Placed, Pose, RobotAsset, World } from '../model/types';
 
 const poseXml = (pose: Pose): string => `<pose>${vec(pose.xyz)} ${vec(pose.rpy)}</pose>`;
@@ -90,6 +89,32 @@ function lightXml(light: Light): string {
   return lines.join('\n');
 }
 
+// Gazebo's WindEffects pushes each link with mass × factor × (wind − its velocity): an approximation that
+// moves a heavy crate as readily as a light one. At a factor of 1 a 200 kg crate on friction 0.8 crept a
+// meter in the smoke test; at 0.5 the push stays under friction for anything well planted, while a light
+// object on a slippery floor still blows away. The factor is written in the plugin's polynomial form
+// (k × (px(x) + qy(y) + rz(z)), with px the constant 1) rather than as a bare number: Harmonic reads a
+// bare number v as v/3 × (v + v + v), so a bare 0.5 acts as 0.25 and the light crate never moved.
+const WIND_FACTOR = 0.5;
+const windy = (world: World): boolean => world.environment.wind.some((v) => v !== 0);
+const windPlugin = `    <plugin filename="gz-sim-wind-effects-system" name="gz::sim::systems::WindEffects"><force_approximation_scaling_factor><k>${WIND_FACTOR}</k><px>0 0 0 1</px></force_approximation_scaling_factor></plugin>\n`;
+
+/**
+ * The scene: the sky by its time of day and cloud cover, the ambient light to
+ * suit, linear fog for the cameras, and the wind, which the WindEffects
+ * system turns into a force on every link that has wind enabled.
+ */
+function sceneXml(world: World): string {
+  const env = world.environment;
+  const sky = skyOf(env.sky);
+  const clouds = env.sky === 'overcast' ? '<clouds><speed>0</speed><humidity>1</humidity><mean_size>1</mean_size></clouds>' : env.sky === 'clear' ? '<clouds><speed>0.4</speed><humidity>0.2</humidity><mean_size>0.3</mean_size></clouds>' : '';
+  const fog = env.fog ? `<fog><type>linear</type><color>${vec(env.fog.color, 3)} 1</color><start>${fmt(env.fog.start, 3)}</start><end>${fmt(env.fog.end, 3)}</end></fog>` : '';
+  const a = sky.ambient;
+  const lines = [`    <scene><ambient>${fmt(a, 3)} ${fmt(a, 3)} ${fmt(a, 3)} 1</ambient><background>${vec(sky.color, 3)} 1</background><sky><time>${fmt(sky.hour, 2)}</time>${clouds}</sky>${fog}</scene>`];
+  if (windy(world)) lines.push(`    <wind><linear_velocity>${vec(env.wind, 3)}</linear_velocity></wind>`);
+  return lines.join('\n');
+}
+
 function groundXml(world: World, heightmapFile: string | null, heightmapSpan: number, heightmapBase: number): string {
   const t = world.terrain;
   const geometry =
@@ -111,7 +136,7 @@ function groundXml(world: World, heightmapFile: string | null, heightmapSpan: nu
   ].join('\n');
 }
 
-function propXml(placed: Placed, resolved: Resolved, meshFile: string): string {
+function propXml(placed: Placed, resolved: Resolved, meshFile: string, wind = false): string {
   const name = identifier(placed.name, 'prop');
   const mesh = resolved.meshes[placed.asset];
   const scale = placed.scale !== 1 ? `<scale>${fmt(placed.scale, 6)} ${fmt(placed.scale, 6)} ${fmt(placed.scale, 6)}</scale>` : '';
@@ -135,6 +160,8 @@ function propXml(placed: Placed, resolved: Resolved, meshFile: string): string {
     `      <static>${placed.physics.static}</static>`,
     `      ${poseXml(placed.pose)}`,
     '      <link name="link">',
+    // The WindEffects system moves only links that ask for it.
+    ...(wind && !placed.physics.static ? ['        <enable_wind>true</enable_wind>'] : []),
     inertial + collision + `        <visual name="visual"><geometry>${visual}</geometry></visual>`,
     '      </link>',
     '    </model>',
@@ -249,10 +276,21 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
     const xml = zoneXml(world, i, files);
     if (xml) props.push(xml);
   }
-  // DART, Gazebo's physics, takes the higher of the two frictions that meet (found with a crate on an ice zone:
-  // it held fast until its own friction came down), so a slippery zone acts only on bodies as slippery.
-  const slippery = zones.filter(({ material }) => world.objects.some((o) => !o.physics.static && o.physics.friction > material.friction + 1e-6));
-  for (const { zone, material } of slippery) notes.push(`${zone.name}: Gazebo takes the higher friction of the two surfaces that meet, so its ${material.friction} only acts on bodies with a friction that low; set the object's friction too.`);
+  // DART, Gazebo's physics, takes the lower of the two frictions that meet, but a friction set on a mesh or a
+  // heightmap collision never counts (found by blowing crates about in the smoke container: a 0.8 crate crept on a
+  // mesh patch at 0.05 and flew on a plane at 0.05; a mesh crate at 0.05 held on a plane at 1). So on a heightmap
+  // the zones, which are meshes there, and the terrain's own friction do nothing, and a mesh-collision prop meets
+  // the world with the other body's friction. On a plane the zones are boxes and work; the notes say the rest.
+  if (world.terrain.kind === 'heightmap') {
+    const free = world.objects.filter((o) => !o.physics.static);
+    for (const { zone, material } of zones) {
+      if (free.some((o) => Math.abs(o.physics.friction - material.friction) > 1e-6)) notes.push(`${zone.name}: Gazebo drops the friction set on a mesh, and on a heightmap a zone is one, so its ${material.friction} does not act there: a body keeps its own friction on it. Set the object's friction too.`);
+    }
+    if (Math.abs(world.terrain.friction - 1) > 1e-6) notes.push(`Terrain: Gazebo drops the friction set on a heightmap, so its ${world.terrain.friction} does not act: a body meets the ground with its own friction.`);
+  }
+  // Only the free ones: whether a loose prop slides is what its friction decides, and nearly every fixed prop is a mesh.
+  const meshy = world.objects.filter((o) => !o.physics.static && o.physics.collision === 'mesh' && Math.abs(o.physics.friction - 1) > 1e-6 && assetOf(world, o) && isProp(assetOf(world, o)!));
+  if (meshy.length) notes.push(`${meshy.map((o) => o.name).join(', ')}: Gazebo drops the friction set on a mesh collision, so what ${meshy.length === 1 ? 'it touches' : 'they touch'} sets the friction; use a box collision where friction matters.`);
   const robots: { placed: Placed; asset: RobotAsset; folder: string }[] = [];
   const includes: string[] = [];
   const written = new Set<string>();
@@ -275,7 +313,7 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
       if (!placed.physics.static && placed.physics.collision === 'mesh' && t.kind === 'heightmap') {
         notes.push(`Gazebo may never settle ${placed.name} on the terrain: a moving object that collides with its mesh rocks on a heightmap in Gazebo Harmonic. Set its collision to Box for a stable result.`);
       }
-      props.push(propXml(placed, resolved, file));
+      props.push(propXml(placed, resolved, file, windy(world)));
       continue;
     }
     const folder = `models/${asset.modelName}`;
@@ -302,6 +340,7 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
 <sdf version="1.11">
   <world name="${escapeXml(worldName)}">
     <gravity>${vec(world.gravity)}</gravity>
+${sceneXml(world)}
     <physics name="default" type="ode"><max_step_size>0.001</max_step_size><real_time_factor>1</real_time_factor></physics>
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
@@ -309,7 +348,7 @@ export function gazeboBundle(world: World, resolved: Resolved): ExportBundle {
     <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors"><render_engine>ogre2</render_engine></plugin>
     <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
     <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
-${world.lights.map(lightXml).join('\n')}
+${windy(world) ? windPlugin : ''}${world.lights.map(lightXml).join('\n')}
 ${groundXml(world, heightmapFile, heightmapSpan, heightmapBase)}
 ${[...props, ...includes].join('\n')}
   </world>

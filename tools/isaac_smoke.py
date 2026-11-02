@@ -47,7 +47,8 @@ def ok(what):
 
 def judge_slide(name, item, travel):
     """A crate set on a surface zone of a slope: on ice it must have slid, on rubber it must have stayed put."""
-    if item['slide'] == 'must':
+    # Isaac has no wind, and the fixture says so where it matters.
+    if item.get('slideIsaac', item['slide']) == 'must':
         if travel < 0.15:
             fail(name, f'{item["id"]} did not slide on the {item["surface"]}: it moved {travel:.3f} m')
         else:

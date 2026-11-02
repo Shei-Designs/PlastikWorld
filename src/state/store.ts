@@ -280,13 +280,17 @@ function addPlaced(asset: Asset, at: Vec3): void {
 
 // --- the demo drive -----------------------------------------------------------
 
-/** The spec a placed object drives with: its own when chosen, else the default. */
-export const driveSpecOf = (placed: Placed): DriveSpec => placed.drive ?? DEFAULT_DRIVE;
+/** The spec a placed object drives with: its own when chosen, else what its package said, else the default. */
+export const driveSpecOf = (world: World, placed: Placed): DriveSpec => {
+  if (placed.drive) return placed.drive;
+  const asset = assetOf(world, placed);
+  return asset?.kind === 'robot' && asset.drive ? asset.drive : DEFAULT_DRIVE;
+};
 
 export function setDriveSpec(id: string, patch: Partial<DriveSpec>): void {
   const placed = state.world.objects.find((o) => o.id === id);
   if (!placed) return;
-  const spec = { ...driveSpecOf(placed), ...patch };
+  const spec = { ...driveSpecOf(state.world, placed), ...patch };
   edit((w) => ({ ...w, objects: w.objects.map((o) => (o.id === id ? { ...o, drive: spec } : o)) }));
   if (state.drive?.id === id) set({ drive: { ...state.drive, spec } });
 }
@@ -313,13 +317,14 @@ export async function startDrive(id: string, box: Box): Promise<void> {
   // Every prop's triangles are needed for its box; the GLBs may not have been read yet.
   for (const o of state.world.objects) if (isProp(assetOf(state.world, o))) await resolveMesh(o.asset);
   const asset = assetOf(state.world, placed);
-  const forward = asset?.kind === 'robot' && asset.format !== 'ros' ? Math.PI / 2 : 0;
+  // Forward as the package says, else the rule the smoke fixtures found: ROS packages face +X, PlastikCAD's other exports +Y.
+  const forward = asset?.kind === 'robot' ? (asset.forward ?? (asset.format !== 'ros' ? Math.PI / 2 : 0)) : 0;
   const ground = heightAt(state.world.terrain, placed.pose.xyz[0], placed.pose.xyz[1]);
   const obstacles = obstaclesFor(state.world, id);
   const foot = boxAt(box, placed.pose, placed.scale);
   const standing = groundUnder(foot, ground, obstacles, placed.pose.xyz[2]);
   set({
-    drive: { id, spec: driveSpecOf(placed), pose: { x: placed.pose.xyz[0], y: placed.pose.xyz[1], yaw: placed.pose.rpy[2] }, at: placed.pose, start: placed.pose, clearance: Math.max(0, placed.pose.xyz[2] - standing), box, obstacles, hit: null, trail: [placed.pose.xyz], forward },
+    drive: { id, spec: driveSpecOf(state.world, placed), pose: { x: placed.pose.xyz[0], y: placed.pose.xyz[1], yaw: placed.pose.rpy[2] }, at: placed.pose, start: placed.pose, clearance: Math.max(0, placed.pose.xyz[2] - standing), box, obstacles, hit: null, trail: [placed.pose.xyz], forward },
     selection: [id],
     pick: { kind: 'object', id },
     tool: null,
@@ -468,12 +473,12 @@ export async function importRobot(zip?: platform.PickedFile): Promise<void> {
     }
     // The package travels with the world: a world is one file, on every platform.
     const files = await collectFiles(folder.files);
-    const asset: Asset = { kind: 'robot', id: newId(), name: info.modelName, format: info.format, source: { name: folder.name, path: folder.path, size: Object.values(files).reduce((n, f) => n + f.length, 0) }, modelName: info.modelName, entry: info.entry, rootBody: info.rootBody, usd: info.usd, files };
+    const asset: Asset = { kind: 'robot', id: newId(), name: info.modelName, format: info.format, source: { name: folder.name, path: folder.path, size: Object.values(files).reduce((n, f) => n + f.length, 0) }, modelName: info.modelName, entry: info.entry, rootBody: info.rootBody, usd: info.usd, files, ...(info.drive ? { drive: { model: info.drive.model, speed: info.drive.speed, turn: info.drive.turn, wheelbase: info.drive.wheelbase }, forward: info.drive.forward } : {}) };
     const notes = await keepRobot(asset);
     edit((w) => ({ ...w, assets: [...w.assets, asset] }));
     addPlaced(asset, [0, 0, 0]);
     if (notes.length) tell('info', notes.join(' '));
-    else tell('ok', `${asset.name} imported as a ${info.format === 'ros' ? 'ROS 2 package' : info.format === 'gazebo' ? 'Gazebo model' : 'MuJoCo model'}.`);
+    else tell('ok', `${asset.name} imported as a ${info.format === 'ros' ? 'ROS 2 package' : info.format === 'gazebo' ? 'Gazebo model' : 'MuJoCo model'}${info.drive ? `, a ${info.drive.model} drive at ${info.drive.speed.toFixed(2)} m/s` : ''}.`);
   } catch (err) {
     fail(err);
   } finally {
@@ -676,6 +681,10 @@ export function setTerrainKind(kind: Terrain['kind']): void {
   if (kind === t.kind) return;
   if (kind === 'plane') updateTerrain({ kind: 'plane', size: t.size, friction: t.friction });
   else updateTerrain({ kind: 'heightmap', size: t.size, friction: t.friction, rows: GRID_DEFAULT, cols: GRID_DEFAULT, heights: rollingField(GRID_DEFAULT, GRID_DEFAULT, 0.5) });
+}
+
+export function updateEnvironment(patch: Partial<World['environment']>): void {
+  edit((w) => ({ ...w, environment: { ...w.environment, ...patch } }));
 }
 
 export function updateWorld(patch: Partial<{ name: string; gravity: Vec3 }>): void {

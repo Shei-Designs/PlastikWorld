@@ -186,9 +186,13 @@ Files app.
 **Done 2026-11-02** with the patch approach in all three: a mesh patch
 (Gazebo, Isaac) or an hfield (MuJoCo) two millimetres over the ground per
 zone. A GeomSubset with a physics material of its own, USD's way, crashed
-PhysX in Isaac Sim 6.2 on the first play, so Isaac gets the patch too. Gazebo's DART takes the higher of the two
-frictions that meet (a crate held on ice until its own friction came down),
-which the Gazebo writer notes; MuJoCo and PhysX let the zone win. Found on the way: MuJoCo takes the larger
+PhysX in Isaac Sim 6.2 on the first play, so Isaac gets the patch too. Gazebo's DART takes the lower of the two
+frictions that meet but drops any friction set on a mesh or heightmap
+collision (found in phase 9 by blowing crates about: a plain crate held on a
+mesh ice patch and flew on an ice plane; first read as "the higher wins"),
+so on a heightmap a zone's friction does nothing and the Gazebo writer notes
+it, as it does a heightmap's own friction and a mesh-collision prop's; on a
+plane the zone is a box and works. MuJoCo and PhysX let the zone win. Found on the way: MuJoCo takes the larger
 friction of two geoms unless one has `priority`, and PhysX averages them
 unless a material asks for `min`; both are authored by the writers.
 
@@ -248,8 +252,10 @@ driving through a doorway in phase 2's drive test; the panel on the tablet.
 drive state in the store ticked from the viewport, a follow camera and a
 trail, the stick for touch. Any placed object can be driven. A room's
 floor counts as ground (a step of 8 cm or less is rolled onto), ramps and
-stairs stop the drive since boxes have no slope; a drive model is not yet
-read from PlastikCAD's controllers.yaml.
+stairs stop the drive since boxes have no slope. The drive model, speed,
+turn and forward direction are read from the package on import (a gz
+DiffDrive, AckermannSteering or MecanumDrive plugin in a URDF or SDF, the
+`drive.json` beside a PlastikCAD MuJoCo model) and can be overridden.
 
 - Kinematic only. The user picks a placed robot, a drive model
   (differential, Ackermann, holonomic; later read from the package's
@@ -266,6 +272,16 @@ driving through the phase 7 building on the tablet with the on-screen
 stick and on the desktop with a gamepad.
 
 ## Phase 9. Sky, lighting, fog and wind (S)
+
+**Done 2026-11-02**: `World.environment` (sky preset, fog, wind), the
+Gazebo scene with sky, fog, wind and WindEffects, MuJoCo's option wind with
+air density plus a skybox and fog, Isaac's dome light with notes for wind
+and fog. The viewer tints the background for any sky but a clear day and
+fogs the distance. A fourth fixture world blows a light crate along.
+Found on the way: Gazebo Harmonic reads a bare `force_approximation_scaling_factor`
+v as v/3 × (v + v + v), so a bare 0.5 acts as 0.25 and moved nothing; the writer
+uses the plugin's polynomial form (`<k>0.5</k><px>0 0 0 1</px>`), which means
+what it says.
 
 - World fields `sky` (preset, sun elevation and azimuth driving the sun
   light), `fog` (colour, start, end) and `wind` (a vector).

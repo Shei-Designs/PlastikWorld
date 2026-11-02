@@ -104,7 +104,7 @@ class Launched:
 
 def judge_slide(name, item, travel):
     """A crate set on a surface zone of a slope: on ice it must have slid, on rubber it must have stayed put.
-    DART takes the higher of the two frictions that meet, so the fixture may say what Gazebo does instead."""
+    DART drops the friction set on a mesh, and a zone on a heightmap is one, so the fixture may say what Gazebo does instead."""
     if item.get('slideGazebo', item['slide']) == 'must':
         if travel < 0.15:
             fail(name, f'{item["id"]} did not slide on the {item["surface"]}: it moved {travel:.3f} m')
